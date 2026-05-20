@@ -16,10 +16,6 @@
         "layaair"
     ],
     "homepage": "https://layaair.com",
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/layabox/LayaVFXSample"
-    },
     "contributes": {
         "engine": [
             {
