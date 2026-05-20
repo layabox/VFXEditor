@@ -1,0 +1,23 @@
+{
+    "name": "com.layabox.vfx",
+    "displayName": "VFX Graph",
+    "version": "1.0.0",
+    "description": "VFX Graph 编辑器及视效引擎模块 (依赖 WebGPU / Compute Shader)",
+    "author": "layabox",
+    "license": "MIT",
+    "contributes": {
+        "engine": [
+            {
+                "name": "laya.vfx",
+                "caption": "VFX (Visual Effects)",
+                "caption:zh-CN": "VFX特效",
+                "tips": "VFX module is used to support GPU-driven visual effects based on Compute Shader (requires WebGPU). When using VFX components, this module must be enabled. When adding VFX components in the IDE, the corresponding engine library will be automatically checked.",
+                "tips:zh-CN": "VFX 特效模块基于 Compute Shader 提供 GPU 驱动的高性能粒子与视觉特效系统（依赖 WebGPU）。当使用 VFX 相关组件时，该模块为必选项，IDE 在添加组件时会自动启用该模块。",
+                "catalog": "3D",
+                "files": [
+                    "engine/laya.vfx.js"
+                ]
+            }
+        ]
+    }
+}
