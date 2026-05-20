@@ -195,9 +195,12 @@ export class VfxNodePicker {
         for (let i = 0; i < node.numChildren; i++) {
             const child = node.getChildAt(i);
             if (child.isFolder) {
-                this._searchNode(child, keyword, isAll);
+                // 先展开父文件夹再递归 —— 否则叶子节点的 cell 还没被 Tree 实例化，
+                // 下面 child.cell.visible 会 throw "Cannot set properties of undefined"
                 if (!isAll) child.expanded = true;
-            } else {
+                this._searchNode(child, keyword, isAll);
+            } else if (child.cell) {
+                // cell 仍可能 undefined（虚拟滚动 / 父级未真正可见时），加 guard 兜底
                 child.cell.visible = isAll || child.data.label.toLowerCase().indexOf(keyword) >= 0;
             }
         }
