@@ -814,7 +814,17 @@ export function genBlockCode(
             continue;
         }
 
-        // ── conformToSphere (matches Unity ConformToSphere.cs) ──
+        // ── conformToSphere — 1:1 跟 Unity ConformToSphere.cs 公式 ──
+        // Unity source:
+        //   float3 dir = (Sphere_center - position);
+        //   float distToCenter = length(dir);
+        //   float distToSurface = distToCenter - Sphere_radius;
+        //   dir /= max(VFX_EPSILON, distToCenter);
+        //   float spdNormal = dot(dir, velocity);
+        //   float ratio = smoothstep(0.0, stickDistance * 2.0, abs(distToSurface));
+        //   float tgtSpeed = sign(distToSurface) * attractionSpeed * ratio;
+        //   float deltaSpeed = tgtSpeed - spdNormal;
+        //   velocity += sign(deltaSpeed) * min(abs(deltaSpeed), deltaTime * lerp(stickForce, attractionForce, ratio)) * dir / mass;
         if (block.typeId === "conformToSphere") {
             if (!block.enabled) continue;
             const cs = block.props || {};
@@ -825,7 +835,7 @@ export function genBlockCode(
             const stickDistance = toFloat(cs.stickDistance ?? 0.1);
             const stickForce = toFloat(cs.stickForce ?? 50);
             lines.push("");
-            lines.push(`    // conformToSphere — Unity ConformToSphere.cs`);
+            lines.push(`    // conformToSphere — Unity ConformToSphere.cs (1:1 公式)`);
             lines.push(`    {`);
             lines.push(`        vec3 _cfDir = vec3(${toFloat(center.x)}, ${toFloat(center.y)}, ${toFloat(center.z)}) - ${particleVar}.position;`);
             lines.push(`        float _cfDist = length(_cfDir);`);
@@ -835,8 +845,7 @@ export function genBlockCode(
             lines.push(`        float _cfRatio = smoothstep(0.0, ${stickDistance} * 2.0, abs(_cfDistSurf));`);
             lines.push(`        float _cfTgtSpd = sign(_cfDistSurf) * ${attractionSpeed} * _cfRatio;`);
             lines.push(`        float _cfDeltaSpd = _cfTgtSpd - _cfSpdN;`);
-            lines.push(`        float _cfMass = ${particleVar}.mass > 0.0 ? ${particleVar}.mass : 1.0;`);
-            lines.push(`        ${particleVar}.velocity += sign(_cfDeltaSpd) * min(abs(_cfDeltaSpd), u_DeltaTime * mix(${stickForce}, ${attractionForce}, _cfRatio)) * _cfDir / _cfMass;`);
+            lines.push(`        ${particleVar}.velocity += sign(_cfDeltaSpd) * min(abs(_cfDeltaSpd), u_DeltaTime * mix(${stickForce}, ${attractionForce}, _cfRatio)) * _cfDir / ${particleVar}.mass;`);
             lines.push(`    }`);
             continue;
         }

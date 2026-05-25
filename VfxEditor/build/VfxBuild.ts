@@ -58,6 +58,10 @@ export interface IVfxCompiledProperty {
     uniform: string;
     type: string;
     default: any;
+    /** 分组名（来自 Blackboard 定义，传给运行时 Inspector 用） */
+    group?: string;
+    /** 友好显示名（来自 Blackboard 定义） */
+    displayName?: string;
 }
 
 export interface IVfxCompiledData {
@@ -426,6 +430,10 @@ export class VfxBuild {
                         colorMapping: (extraCtx.props as any)?.colorMapping || "Default",
                         uvScale: (extraCtx.props as any)?.uvScale,
                         uvBias: (extraCtx.props as any)?.uvBias,
+                        // ShaderGraph property binding/defaults/expressions（extra output 也跟 primary 一样需要 hoist）
+                        shaderPropertyBindings: (extraCtx.props as any)?.shaderPropertyBindings || undefined,
+                        shaderPropertyDefaults: (extraCtx.props as any)?.shaderPropertyDefaults || undefined,
+                        shaderPropertyExpressions: (extraCtx.props as any)?.shaderPropertyExpressions || undefined,
                     });
                 }
                 compiled.extraOutputs = extraOutputs;
@@ -505,7 +513,7 @@ export class VfxBuild {
             eventAttributes: VfxBuild._collectEventAttributesFromPerSystem(perSystemAttrs),
             // Curve type 已被 _compileGetProperty inline 化（frames 烘焙到 curve atlas），
             // runtime 不需要 uniform。skip 避免 normalizePropertyType fallback Float 上传无意义值。
-            properties: (graphData.properties || []).filter(p => p.exposed && String(p.type).toLowerCase() !== "curve").map(p => ({ name: p.name, uniform: `u_VfxProp_${p.name}`, type: p.type, default: p.default })),
+            properties: (graphData.properties || []).filter(p => p.exposed && String(p.type).toLowerCase() !== "curve").map(p => ({ name: p.name, uniform: `u_VfxProp_${p.name}`, type: p.type, default: p.default, group: p.group, displayName: p.displayName })),
             systems,
             events: VfxBuild._compileEvents(graphData.events || [], ctxIdToSystemIdx, validParticles, sorted.length),
         };
@@ -760,6 +768,23 @@ export class VfxBuild {
         }
         if (customShaderRes) {
             result.customShaderRes = customShaderRes;
+        }
+        // ShaderGraph property binding (VFX exposed prop name → shader uniform name)
+        // 来自 unity-vfx-to-laya 转换器扫 Unity OutputContext m_InputSlots slot.m_Property.name + m_LinkedSlots → VFXParameter.m_ExposedName 反查的映射
+        // runtime VisualEffect setTexture 时按这个 binding 把 exposed name → shader uniform name 转换让 .bps sampler 正确接收
+        if (outputCtx.props && (outputCtx.props as any).shaderPropertyBindings && typeof (outputCtx.props as any).shaderPropertyBindings === "object") {
+            result.shaderPropertyBindings = (outputCtx.props as any).shaderPropertyBindings;
+        }
+        // ShaderGraph property inline defaults (shader uniform name → res://uuid，VFX 端 outputCtx 给某 shader 属性写的 inline 资源 default
+        // 而非 link 到 exposed property — .bps 编译时丢了这种 inline default，所以 runtime 也要 setTexture 覆盖让 wall mesh 等用 uni_ring_warped 而非 .bps 内 white texture)
+        if (outputCtx.props && (outputCtx.props as any).shaderPropertyDefaults && typeof (outputCtx.props as any).shaderPropertyDefaults === "object") {
+            result.shaderPropertyDefaults = (outputCtx.props as any).shaderPropertyDefaults;
+        }
+        // ShaderGraph property expression chain (VFX operator chain → shader uniform，runtime 每帧 evaluate)
+        // 来自 unity-vfx-to-laya 转换器序列化的 operator chain（Sample.Gradient/SampleCurve/Math 等）
+        // runtime VisualEffect._evaluateShaderExpressions 每帧 evaluate → setVector/setNumber 到 material
+        if (outputCtx.props && (outputCtx.props as any).shaderPropertyExpressions && typeof (outputCtx.props as any).shaderPropertyExpressions === "object") {
+            (result as any).shaderPropertyExpressions = (outputCtx.props as any).shaderPropertyExpressions;
         }
 
         if (boundsMode === "Manual") {
@@ -1345,16 +1370,22 @@ export class VfxBuild {
             const links = evt.flowLinks;
             if (links) {
                 for (const key of Object.keys(links)) {
-                    const lk = links[key];
-                    if (lk.targetSlotId === "start") {
-                        const idx = spawnIdToIdx.get(lk.targetId);
-                        if (idx != null) { playSystems.push(idx); connectedStart.add(idx); }
-                    } else if (lk.targetSlotId === "stop") {
-                        const idx = spawnIdToIdx.get(lk.targetId);
-                        if (idx != null) { stopSystems.push(idx); connectedStop.add(idx); }
-                    } else if (lk.targetSlotId === "input") {
-                        const idx = initIdToSystemIdx.get(lk.targetId);
-                        if (idx != null) initSystems.push(idx);
+                    // event 的 flow link 是 1:N（一个 source 连多个 target），所以 lk 可能是 array；
+                    // 单 target 则是 object，统一规范成 array 再遍历
+                    const lkRaw = links[key];
+                    const lks: any[] = Array.isArray(lkRaw) ? lkRaw : [lkRaw];
+                    for (const lk of lks) {
+                        if (!lk) continue;
+                        if (lk.targetSlotId === "start") {
+                            const idx = spawnIdToIdx.get(lk.targetId);
+                            if (idx != null) { playSystems.push(idx); connectedStart.add(idx); }
+                        } else if (lk.targetSlotId === "stop") {
+                            const idx = spawnIdToIdx.get(lk.targetId);
+                            if (idx != null) { stopSystems.push(idx); connectedStop.add(idx); }
+                        } else if (lk.targetSlotId === "input") {
+                            const idx = initIdToSystemIdx.get(lk.targetId);
+                            if (idx != null) initSystems.push(idx);
+                        }
                     }
                 }
             }

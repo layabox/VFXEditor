@@ -13,13 +13,21 @@ import { componentTypes } from "./editor/ComponentTypes";
  *   VFXRenderer fallback 路径能通过 Shader3D.find 命中
  */
 
-/** vfx 内置默认资源（LayaPro/bin/internal/vfx/ 下，UUID 与 .meta 一致） */
+/** vfx 内置默认资源（com.layabox.vfx/runtime/ 下，UUID 与 .meta 一致）
+ * 加载顺序约定：.shader 先于 .lmat —— material 引用 shader name，加载 .lmat 不会主动 Shader3D.add，
+ *               必须先加载 .shader 触发 shader 注册，否则 VFXRenderer fallback Shader3D.find 失败
+ *               报 `'VFXUnlit' shader not registered`。
+ */
 const VFX_BUILTIN_UUIDS = [
-    "13d6c5e4-ff1f-4739-b21d-0d64931564cb", // VFXUnlit.lmat
-    "356f6643-fab9-4626-b04f-9e07482f5b53", // VFXStrip.lmat
+    // .shader 文件 — 加载触发 Shader3D.add 注册 shader name
+    "ce815578-6547-4f83-be80-a89912dc03d0", // VFXUnlit.shader
+    "d29a39fc-4dd9-4e3c-8451-db6a6092d17a", // VFXStrip.shader
     "046c3dc9-8ef4-4e3b-bce3-df93e11bd86e", // VFXBillboardProcedural.shader
     "9e6cee89-5666-43e3-a064-7c26d8ce36d8", // VFXCubeProcedural.shader
     "7b8f3d2e-a415-4c6b-9d8f-2e1a5c3b4d6a", // VFXDistortionQuad.shader
+    // .lmat 文件 — 加载实例化默认 material，依赖上面 shader 已注册
+    "13d6c5e4-ff1f-4739-b21d-0d64931564cb", // VFXUnlit.lmat
+    "356f6643-fab9-4626-b04f-9e07482f5b53", // VFXStrip.lmat
 ];
 
 @IEditorEnv.regClass()

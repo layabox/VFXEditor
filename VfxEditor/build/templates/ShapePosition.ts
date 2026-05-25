@@ -402,7 +402,11 @@ function genCircleCompiled(compiledExpr: string, compiledStmts: string[], pVar: 
     return [...lines, ...genCircleCore("_ac.circle.transform[3].xyz", "_ac.circle.radius", "_ac.arc", pVar, indent, mode, thickness, spawn)];
 }
 
-/** Circle core GLSL generation — XY plane, arc starts from +Y */
+/** Circle core GLSL generation — XY plane, arc starts from +Y
+ * 注: Unity PositionCircle.cs 默认 Circle 在 XZ plane (transform identity axisX/Z)，
+ * 但 VFX 中常配 TransformPosition operator + Rx(90°) rotation 把 ring 旋转到 XY plane (大多 effect 实际用 XY plane)
+ * Laya 转换器目前漏读 TransformPosition operator chain, 直接 emit XY plane 简化跟 Unity 最常见配置一致
+ */
 function genCircleCore(center: string, radius: string, arc: string, pVar: string, indent: string, mode: string, thickness: string = "0.1", spawn?: SpawnOpts): string[] {
     const seed = `${pVar}.seed`;
     // perStripRand: 用 stripIndex 派生 hash seed → 同一 strip 内所有粒子用同一 t（径向尾迹）

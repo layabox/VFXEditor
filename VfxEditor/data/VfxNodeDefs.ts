@@ -84,6 +84,8 @@ export function getPropSettingsRegistryId(vfxType: string): string { return "vfx
 function buildPropSettingsDescriptors(vfxType: string): IEditor.FPropertyDescriptor[] {
     const props: IEditor.FPropertyDescriptor[] = [
         { name: "exposed", caption: "Exposed", type: "boolean", default: true },
+        { name: "group", caption: "Group", type: "string", default: "" },
+        { name: "displayName", caption: "Display Name", type: "string", default: "" },
     ];
 
     switch (vfxType) {

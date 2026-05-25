@@ -60,6 +60,16 @@ export const componentTypes: IEditor.FTypeDescriptor[] = [
                 type: "string",
                 default: "OnPlay",
             },
+            {
+                // VisualEffect.propertyOverrides 字段：存 JSON string（不能用 type=object，LayaPro 序列化层不识别动态 key map）。
+                // Field UI 内部 JSON.parse → object 编辑，setValue 前 JSON.stringify → string。
+                // 引擎 runtime 加载时同样 JSON.parse 还原成 object 再调 setPropertyXXX 应用。
+                name: "propertyOverrides",
+                caption: "Properties",
+                type: "string",
+                inspector: "VfxPropertyOverrides",
+                default: "{}",
+            } as any,
         ],
     },
 ];

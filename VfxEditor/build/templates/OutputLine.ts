@@ -38,7 +38,8 @@ export function generateLineOutput(
 
     const blockLines = blockCode ? blockCode + "\n" : "";
     const tx = (targetOffset?.x ?? 0).toFixed(6);
-    const ty = (targetOffset?.y ?? 0.1).toFixed(6);
+    // 之前 Y default 0.1 不对称 (跟 X/Z 0 不一致), 像 placeholder; 统一 0 让 line targetOffset 未指定时不强加 Y 偏移
+    const ty = (targetOffset?.y ?? 0).toFixed(6);
     const tz = (targetOffset?.z ?? 0).toFixed(6);
 
     return `Shader3D Start

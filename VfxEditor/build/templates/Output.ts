@@ -229,7 +229,9 @@ function genOrientCode(block: IVfxBlockData, attrNames: Set<string>, indent: str
             } else {
                 lines.push(`${indent}vec3 _target = ${target};`);
             }
-            lines.push(`${indent}vec3 _lookDir = _target - ${pos};`);
+            // Unity Orient.cs LookAtPosition: axisZ = normalize(position - Position) — 从 target 朝 particle 远离方向（mesh face 朝外）
+            // 之前实现写成 target - pos (朝中心) 让 mesh face 朝内 → Aura wall plane 视觉错（粒子 mesh 反向）
+            lines.push(`${indent}vec3 _lookDir = ${pos} - _target;`);
             lines.push(`${indent}float _lookDist = length(_lookDir);`);
             lines.push(`${indent}vec3 _orientZ = (_lookDist > 0.001) ? _lookDir / _lookDist : vec3(0.0, 0.0, 1.0);`);
             lines.push(`${indent}vec3 _cross1 = cross(vec3(0.0, 1.0, 0.0), _orientZ);`);
@@ -256,7 +258,8 @@ function genOrientCode(block: IVfxBlockData, attrNames: Set<string>, indent: str
             // Project particle position onto infinite line: t = dot(pos - start, dir) / dot(dir, dir)
             lines.push(`${indent}float _t = (_lineLenSq > 0.001) ? dot(${pos} - _lineStart, _lineDir) / _lineLenSq : 0.0;`);
             lines.push(`${indent}vec3 _closest = _lineStart + _t * _lineDir;`);
-            lines.push(`${indent}vec3 _lookDir2 = _closest - ${pos};`);
+            // Unity Orient.cs LookAtLine: axisZ = normalize(position - target) — 远离 line 方向（同 LookAtPosition）
+            lines.push(`${indent}vec3 _lookDir2 = ${pos} - _closest;`);
             lines.push(`${indent}float _lookDist2 = length(_lookDir2);`);
             lines.push(`${indent}vec3 _orientZ = (_lookDist2 > 0.001) ? _lookDir2 / _lookDist2 : vec3(0.0, 0.0, 1.0);`);
             lines.push(`${indent}vec3 _cross1 = cross(vec3(0.0, 1.0, 0.0), _orientZ);`);

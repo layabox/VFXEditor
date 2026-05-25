@@ -190,6 +190,8 @@
         VFXPropertyType["Vec4"] = "vec4";
         VFXPropertyType["Color"] = "color";
         VFXPropertyType["Gradient"] = "gradient";
+        VFXPropertyType["Texture2D"] = "texture2D";
+        VFXPropertyType["Curve"] = "curve";
     })(exports.VFXPropertyType || (exports.VFXPropertyType = {}));
     class VFXPropertyDesc {
     }
@@ -575,6 +577,8 @@
                 mesh.getColors(colors);
                 if (!colors.length)
                     return;
+                if (colors[0] == null)
+                    return;
                 const vertCount = colors.length;
                 const positions = [];
                 mesh.getPositions(positions);
@@ -688,24 +692,21 @@
             });
         }
         static async _patchTextureAlphaFromLuminance(tex, url) {
-            var _a;
             if (VFXRenderer._patchedTextureUrls.has(url))
                 return;
             VFXRenderer._patchedTextureUrls.add(url);
             console.log("[VFX alpha] start url=", url);
             try {
-                const realUrl = ((_a = Laya.Laya.URL) === null || _a === void 0 ? void 0 : _a.formatURL) ? Laya.Laya.URL.formatURL(url) : url;
-                console.log("[VFX alpha] realUrl=", realUrl);
-                const resp = await fetch(realUrl);
-                console.log("[VFX alpha] fetch ok=", resp.ok, "type=", resp.headers.get("content-type"));
-                if (!resp.ok)
+                const buffer = await Laya.Laya.loader.load(url, Laya.Loader.BUFFER);
+                if (!buffer || !(buffer instanceof ArrayBuffer)) {
+                    console.warn("[VFX alpha] loader returned non-ArrayBuffer:", typeof buffer);
                     return;
-                const blob = await resp.blob();
-                console.log("[VFX alpha] blob.type=", blob.type, "blob.size=", blob.size);
-                if (!blob.type.includes("png") && !url.toLowerCase().endsWith(".png") && !blob.type.includes("image")) {
+                }
+                if (!url.toLowerCase().endsWith(".png")) {
                     console.log("[VFX alpha] skip - not png");
                     return;
                 }
+                const blob = new Blob([buffer], { type: "image/png" });
                 const imgBitmap = await createImageBitmap(blob);
                 const canvas = document.createElement("canvas");
                 canvas.width = imgBitmap.width;
@@ -1733,7 +1734,7 @@
 
     var VFXRenderVertexGLSL = "\n#include \"VFXRenderCommon.glsl\";\nvec3 rotateByQuat(vec3 v,vec4 q){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}VFXParticle getVFXParticle(){VFXParticle p;p.position=a_AttrPosition.xyz;p.normalizedAge=a_AttrPosition.w;p.color=a_AttrColor;p.rotation=a_AttrRotation;p.scale=a_AttrScale.xyz;p.texIndex=a_AttrScale.w;p.pivot=a_AttrPivot.xyz;return p;}VFXParticle vfxProcessVertex(inout Vertex vertex){VFXParticle p=getVFXParticle();vec3 v=vertex.positionOS-p.pivot;v=v*p.scale;v=rotateByQuat(v,p.rotation);vertex.positionOS=v+p.position;return p;}vec3 vfxWorldPosition(Vertex vertex,mat4 worldMat){vec4 pos=worldMat*vec4(vertex.positionOS,1.0);return pos.xyz/pos.w;}";
 
-    var BlueprintPixelVertexVFXGLSL = "#if !defined(BlueprintPixelVertexVFX_lib)\n#define BlueprintPixelVertexVFX_lib\n#include \"shaderBlueprint/lib/BlueprintPixel.glsl\";\n#ifdef VFX_INSTANCED\nstruct VFXParticle{vec3 position;float normalizedAge;vec4 color;vec4 rotation;vec3 scale;float texIndex;vec3 pivot;};vec3 vfxRotateByQuat(vec3 v,vec4 q){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}VFXParticle vfxGetParticle(){VFXParticle p;p.position=a_AttrPosition.xyz;p.normalizedAge=a_AttrPosition.w;p.color=a_AttrColor;p.rotation=a_AttrRotation;p.scale=a_AttrScale.xyz;p.texIndex=a_AttrScale.w;p.pivot=a_AttrPivot.xyz;return p;}VFXParticle vfxTransformVertex(inout Vertex vertex){VFXParticle p=vfxGetParticle();vec3 vp=vertex.positionOS-p.pivot;vp=vp*p.scale;vp=vfxRotateByQuat(vp,p.rotation);vertex.positionOS=vp+p.position;vertex.normalOS=vfxRotateByQuat(vertex.normalOS,p.rotation);\n#ifdef TANGENT\nvec3 t=vfxRotateByQuat(vertex.tangentOS.xyz,p.rotation);vertex.tangentOS=vec4(t,vertex.tangentOS.w);\n#endif\n#ifdef COLOR\nvertex.vertexColor.r*=p.color.r;vertex.vertexColor.g*=p.color.g;vertex.vertexColor.b=p.color.b;vertex.vertexColor.a*=p.color.a;\n#endif\nreturn p;}\n#endif\n#endif\n";
+    var BlueprintPixelVertexVFXGLSL = "#if !defined(BlueprintPixelVertexVFX_lib)\n#define BlueprintPixelVertexVFX_lib\n#include \"shaderBlueprint/lib/BlueprintPixel.glsl\";\n#ifdef VFX_INSTANCED\nvarying float v_TexIndex;struct VFXParticle{vec3 position;float normalizedAge;vec4 color;vec4 rotation;vec3 scale;float texIndex;vec3 pivot;};vec3 vfxRotateByQuat(vec3 v,vec4 q){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}VFXParticle vfxGetParticle(){VFXParticle p;p.position=a_AttrPosition.xyz;p.normalizedAge=a_AttrPosition.w;p.color=a_AttrColor;p.rotation=a_AttrRotation;p.scale=a_AttrScale.xyz;p.texIndex=a_AttrScale.w;p.pivot=a_AttrPivot.xyz;return p;}VFXParticle vfxTransformVertex(inout Vertex vertex){VFXParticle p=vfxGetParticle();v_TexIndex=p.texIndex;vec3 vp=vertex.positionOS-p.pivot;vp=vp*p.scale;vp=vfxRotateByQuat(vp,p.rotation);vertex.positionOS=vp+p.position;vertex.normalOS=vfxRotateByQuat(vertex.normalOS,p.rotation);\n#ifdef TANGENT\nvec3 t=vfxRotateByQuat(vertex.tangentOS.xyz,p.rotation);vertex.tangentOS=vec4(t,vertex.tangentOS.w);\n#endif\n#ifdef COLOR\nvertex.vertexColor.r*=p.color.r;vertex.vertexColor.g*=p.color.g;vertex.vertexColor.b=p.color.b;vertex.vertexColor.a*=p.color.a;\n#endif\nreturn p;}\n#endif\n#endif\n";
 
     class VFXShaderInit {
         static init() {
@@ -3598,6 +3599,25 @@
                             const shaderUrl = sys.customShaderRes;
                             loadPromises.push(Laya.Laya.loader.load(shaderUrl).then(() => { console.log(`[VFX Parser] preloaded custom shader '${sys.customShaderName}' from ${shaderUrl}`); }, (err) => { console.warn(`[VFX Parser] failed preloading custom shader '${sys.customShaderName}' from ${shaderUrl}`, err); }));
                         }
+                        if (sys.shaderPropertyBindings && typeof sys.shaderPropertyBindings === "object") {
+                            desc.shaderPropertyBindings = sys.shaderPropertyBindings;
+                        }
+                        if (sys.shaderPropertyDefaults && typeof sys.shaderPropertyDefaults === "object") {
+                            const entries = {};
+                            for (const uniformName in sys.shaderPropertyDefaults) {
+                                const url = sys.shaderPropertyDefaults[uniformName];
+                                if (typeof url !== "string" || !url)
+                                    continue;
+                                const entry = { url, texture: null };
+                                entries[uniformName] = entry;
+                                loadPromises.push(Laya.Laya.loader.load(url).then((tex) => { if (tex)
+                                    entry.texture = tex; }, (err) => { console.warn(`[VFX] shaderPropertyDefault '${uniformName}' load failed: ${url}`, err); }));
+                            }
+                            desc.shaderPropertyDefaults = entries;
+                        }
+                        if (sys.shaderPropertyExpressions && typeof sys.shaderPropertyExpressions === "object") {
+                            desc.shaderPropertyExpressions = sys.shaderPropertyExpressions;
+                        }
                         if (typeof sys.colorMapping === "string")
                             desc.stripColorMapping = sys.colorMapping;
                         if (typeof sys.tilingMode === "string")
@@ -3706,6 +3726,7 @@
                                 case "Capsule": return Laya.PrimitiveMesh.createCapsule(0.5, 2, 12, 12);
                                 case "Plane": return Laya.PrimitiveMesh.createPlane(10, 10, 1, 1);
                                 case "Quad": return Laya.PrimitiveMesh.createQuad(1, 1);
+                                case "Triangle": return Laya.PrimitiveMesh.createTriangle(1, 1);
                                 default: return null;
                             }
                         };
@@ -3936,6 +3957,7 @@
                                 case "Capsule": return Laya.PrimitiveMesh.createCapsule(0.5, 2, 12, 12);
                                 case "Plane": return Laya.PrimitiveMesh.createPlane(10, 10, 1, 1);
                                 case "Quad": return Laya.PrimitiveMesh.createQuad(1, 1);
+                                case "Triangle": return Laya.PrimitiveMesh.createTriangle(1, 1);
                                 default: return null;
                             }
                         };
@@ -4011,6 +4033,29 @@
                                 ];
                             }
                             desc.default = [];
+                            break;
+                        }
+                        case exports.VFXPropertyType.Texture2D: {
+                            let url = null;
+                            if (Array.isArray(d) && typeof d[0] === "string")
+                                url = d[0];
+                            else if (typeof d === "string")
+                                url = d;
+                            desc.default = url ? [url] : [];
+                            desc.texture = null;
+                            if (url) {
+                                const loadTex = Laya.Laya.loader.load(url).then((tex) => {
+                                    if (tex) {
+                                        desc.texture = tex.bitmap || tex._image || tex._source || tex;
+                                    }
+                                    else {
+                                        console.warn(`[VFX] Texture2D property '${prop.name}' load returned null: ${url}`);
+                                    }
+                                }, (err) => {
+                                    console.warn(`[VFX] Texture2D property '${prop.name}' load failed: ${url}`, err);
+                                });
+                                loadPromises.push(loadTex);
+                            }
                             break;
                         }
                     }
@@ -4613,6 +4658,8 @@
             return exports.VFXPropertyType.Color;
         if (s === "gradient")
             return exports.VFXPropertyType.Gradient;
+        if (s === "texture2d")
+            return exports.VFXPropertyType.Texture2D;
         return exports.VFXPropertyType.Float;
     }
     const EventAttributeTypeMap = {
@@ -4657,6 +4704,263 @@
             this.unscaledTimeStepCount = Math.min(Math.max(signedStepCount, 0), maxFixedStepCount);
             this.unscaledTimeAccum -= this.unscaledTimeStepCount * fixedTimeStep;
             currentUnscaledDeltaTime = Laya.MathUtil.clamp(currentUnscaledDeltaTime, 0, maxDeltaTime);
+        }
+    }
+
+    class ShaderExpressionEvaluator {
+        static evaluate(graph, ctx) {
+            if (!graph || !graph.nodes || !graph.rootNodeId)
+                return null;
+            const cache = {};
+            return this._evalNode(graph.rootNodeId, graph.nodes, cache, ctx);
+        }
+        static _evalNode(id, nodes, cache, ctx) {
+            var _a, _b, _c, _d;
+            if (cache[id] !== undefined)
+                return cache[id];
+            const n = nodes[id];
+            if (!n)
+                return null;
+            let result = null;
+            switch (n.kind) {
+                case "Constant":
+                    result = n.value;
+                    break;
+                case "VFXParameter": {
+                    const pv = ctx.propertyValues && n.exposedName ? ctx.propertyValues.get(n.exposedName) : null;
+                    if (pv) {
+                        if (pv.rawGradientStops && pv.rawGradientStops.length > 0) {
+                            result = { __layaGradientStops: pv.rawGradientStops };
+                        }
+                        else if (pv.rawCurveFrames && pv.rawCurveFrames.length > 0) {
+                            result = { __layaCurveFrames: pv.rawCurveFrames };
+                        }
+                        else if (pv.value && pv.value.length > 0) {
+                            const v = pv.value;
+                            result = pv.value.length === 1 ? Number(v[0]) || 0 : { r: (_a = v[0]) !== null && _a !== void 0 ? _a : 0, g: (_b = v[1]) !== null && _b !== void 0 ? _b : 0, b: (_c = v[2]) !== null && _c !== void 0 ? _c : 0, a: (_d = v[3]) !== null && _d !== void 0 ? _d : 0 };
+                        }
+                        else if (pv.cached != null) {
+                            result = pv.cached;
+                        }
+                        else {
+                            result = n.defaultValue;
+                        }
+                    }
+                    else {
+                        result = n.defaultValue;
+                    }
+                    break;
+                }
+                case "VFXTotalTime":
+                case "VFXTime":
+                    result = ctx.totalTime;
+                    break;
+                case "VFXDeltaTime":
+                    result = ctx.deltaTime;
+                    break;
+                case "VFXFrameIndex":
+                    result = Math.floor(ctx.totalTime * 60);
+                    break;
+                case "GlobalTimeRatio":
+                    result = ctx.totalTime - Math.floor(ctx.totalTime);
+                    break;
+                case "Random": {
+                    const min = Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0;
+                    const max = Number(this._evalNode(n.inputs[1], nodes, cache, ctx)) || 1;
+                    const seed = n.inputs.length > 2 ? Number(this._evalNode(n.inputs[2], nodes, cache, ctx)) || 0 : 0;
+                    const t = ctx.totalTime + seed * 13.7;
+                    const r = Math.abs(Math.sin(t * 12.9898) * 43758.5453) % 1;
+                    result = min + (max - min) * r;
+                    break;
+                }
+                case "SampleGradient": {
+                    const grad = this._evalNode(n.inputs[0], nodes, cache, ctx);
+                    const t = Number(this._evalNode(n.inputs[1], nodes, cache, ctx)) || 0;
+                    result = this._sampleGradient(grad, t);
+                    break;
+                }
+                case "SampleCurve": {
+                    const curve = this._evalNode(n.inputs[0], nodes, cache, ctx);
+                    const t = Number(this._evalNode(n.inputs[1], nodes, cache, ctx)) || 0;
+                    result = this._sampleCurve(curve, t);
+                    break;
+                }
+                case "Add":
+                case "Sub":
+                case "Mul":
+                case "Div":
+                case "Mod": {
+                    const a = this._evalNode(n.inputs[0], nodes, cache, ctx);
+                    const b = this._evalNode(n.inputs[1], nodes, cache, ctx);
+                    result = this._binOp(n.kind, a, b);
+                    break;
+                }
+                case "Lerp": {
+                    const x = this._evalNode(n.inputs[0], nodes, cache, ctx);
+                    const y = this._evalNode(n.inputs[1], nodes, cache, ctx);
+                    const s = Number(this._evalNode(n.inputs[2], nodes, cache, ctx)) || 0;
+                    result = this._lerp(x, y, s);
+                    break;
+                }
+                case "Sin":
+                    result = Math.sin(Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0);
+                    break;
+                case "Cos":
+                    result = Math.cos(Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0);
+                    break;
+                case "Frac": {
+                    const x = Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0;
+                    result = x - Math.floor(x);
+                    break;
+                }
+                case "Abs":
+                    result = Math.abs(Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0);
+                    break;
+                case "Neg":
+                    result = -(Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0);
+                    break;
+                case "Saturate": {
+                    const x = Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0;
+                    result = Math.max(0, Math.min(1, x));
+                    break;
+                }
+                default:
+                    result = null;
+            }
+            cache[id] = result;
+            return result;
+        }
+        static _sampleGradient(g, t) {
+            if (!g)
+                return { r: 1, g: 1, b: 1, a: 1 };
+            const clamp = Math.max(0, Math.min(1, t));
+            if (g.__layaGradientStops && Array.isArray(g.__layaGradientStops) && g.__layaGradientStops.length > 0) {
+                const stops = g.__layaGradientStops;
+                let s0 = stops[0], s1 = stops[stops.length - 1];
+                for (let i = 0; i < stops.length - 1; i++) {
+                    if (clamp >= stops[i].t && clamp <= stops[i + 1].t) {
+                        s0 = stops[i];
+                        s1 = stops[i + 1];
+                        break;
+                    }
+                }
+                const denom = (s1.t - s0.t) || 1;
+                const u = Math.max(0, Math.min(1, (clamp - s0.t) / denom));
+                const c0 = s0.color || [1, 1, 1, 1];
+                const c1 = s1.color || [1, 1, 1, 1];
+                return {
+                    r: c0[0] + (c1[0] - c0[0]) * u,
+                    g: c0[1] + (c1[1] - c0[1]) * u,
+                    b: c0[2] + (c1[2] - c0[2]) * u,
+                    a: c0[3] + (c1[3] - c0[3]) * u,
+                };
+            }
+            if (!g.colorKeys || g.colorKeys.length === 0)
+                return { r: 1, g: 1, b: 1, a: 1 };
+            const keys = g.colorKeys;
+            const aKeys = g.alphaKeys || [{ alpha: 1, time: 0 }];
+            const mode = g.mode || 0;
+            let c0 = keys[0], c1 = keys[keys.length - 1];
+            for (let i = 0; i < keys.length - 1; i++) {
+                if (clamp >= keys[i].time && clamp <= keys[i + 1].time) {
+                    c0 = keys[i];
+                    c1 = keys[i + 1];
+                    break;
+                }
+            }
+            const denom = (c1.time - c0.time) || 1;
+            const u = mode === 1 ? 0 : Math.max(0, Math.min(1, (clamp - c0.time) / denom));
+            const r = c0.color.r + (c1.color.r - c0.color.r) * u;
+            const g_ = c0.color.g + (c1.color.g - c0.color.g) * u;
+            const b = c0.color.b + (c1.color.b - c0.color.b) * u;
+            let a0 = aKeys[0], a1 = aKeys[aKeys.length - 1];
+            for (let i = 0; i < aKeys.length - 1; i++) {
+                if (clamp >= aKeys[i].time && clamp <= aKeys[i + 1].time) {
+                    a0 = aKeys[i];
+                    a1 = aKeys[i + 1];
+                    break;
+                }
+            }
+            const aDenom = (a1.time - a0.time) || 1;
+            const au = mode === 1 ? 0 : Math.max(0, Math.min(1, (clamp - a0.time) / aDenom));
+            const a = a0.alpha + (a1.alpha - a0.alpha) * au;
+            return { r, g: g_, b, a };
+        }
+        static _sampleCurve(c, t) {
+            if (!c || !c.frames || c.frames.length === 0)
+                return 0;
+            if (c.frames.length === 1)
+                return c.frames[0].value;
+            const clamp = Math.max(c.frames[0].time, Math.min(c.frames[c.frames.length - 1].time, t));
+            let f0 = c.frames[0], f1 = c.frames[c.frames.length - 1];
+            for (let i = 0; i < c.frames.length - 1; i++) {
+                if (clamp >= c.frames[i].time && clamp <= c.frames[i + 1].time) {
+                    f0 = c.frames[i];
+                    f1 = c.frames[i + 1];
+                    break;
+                }
+            }
+            const denom = (f1.time - f0.time) || 1;
+            const u = (clamp - f0.time) / denom;
+            return f0.value + (f1.value - f0.value) * u;
+        }
+        static _binOp(kind, a, b) {
+            const isVec = (v) => v && typeof v === "object" && ("r" in v || "x" in v);
+            if (isVec(a) || isVec(b)) {
+                const getC = (v, k) => {
+                    if (typeof v === "number")
+                        return v;
+                    if (k === "r" || k === "x")
+                        return v.r !== undefined ? v.r : v.x;
+                    if (k === "g" || k === "y")
+                        return v.g !== undefined ? v.g : v.y;
+                    if (k === "b" || k === "z")
+                        return v.b !== undefined ? v.b : v.z;
+                    if (k === "a" || k === "w")
+                        return v.a !== undefined ? v.a : v.w;
+                    return 0;
+                };
+                const op = (x, y) => kind === "Add" ? x + y : kind === "Sub" ? x - y : kind === "Mul" ? x * y : kind === "Div" ? (y !== 0 ? x / y : 0) : kind === "Mod" ? x - y * Math.floor(x / (y || 1)) : 0;
+                return {
+                    r: op(getC(a, "r"), getC(b, "r")),
+                    g: op(getC(a, "g"), getC(b, "g")),
+                    b: op(getC(a, "b"), getC(b, "b")),
+                    a: op(getC(a, "a"), getC(b, "a")),
+                };
+            }
+            const x = Number(a) || 0, y = Number(b) || 0;
+            switch (kind) {
+                case "Add": return x + y;
+                case "Sub": return x - y;
+                case "Mul": return x * y;
+                case "Div": return y !== 0 ? x / y : 0;
+                case "Mod": return x - y * Math.floor(x / (y || 1));
+            }
+            return 0;
+        }
+        static _lerp(x, y, s) {
+            var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r;
+            const isVec = (v) => v && typeof v === "object";
+            if (isVec(x)) {
+                return {
+                    r: ((_b = (_a = x.r) !== null && _a !== void 0 ? _a : x.x) !== null && _b !== void 0 ? _b : 0) * (1 - s) + ((_d = (_c = y.r) !== null && _c !== void 0 ? _c : y.x) !== null && _d !== void 0 ? _d : 0) * s,
+                    g: ((_f = (_e = x.g) !== null && _e !== void 0 ? _e : x.y) !== null && _f !== void 0 ? _f : 0) * (1 - s) + ((_h = (_g = y.g) !== null && _g !== void 0 ? _g : y.y) !== null && _h !== void 0 ? _h : 0) * s,
+                    b: ((_k = (_j = x.b) !== null && _j !== void 0 ? _j : x.z) !== null && _k !== void 0 ? _k : 0) * (1 - s) + ((_m = (_l = y.b) !== null && _l !== void 0 ? _l : y.z) !== null && _m !== void 0 ? _m : 0) * s,
+                    a: ((_p = (_o = x.a) !== null && _o !== void 0 ? _o : x.w) !== null && _p !== void 0 ? _p : 0) * (1 - s) + ((_r = (_q = y.a) !== null && _q !== void 0 ? _q : y.w) !== null && _r !== void 0 ? _r : 0) * s,
+                };
+            }
+            return (Number(x) || 0) * (1 - s) + (Number(y) || 0) * s;
+        }
+        static toVector4(v, out) {
+            if (!out)
+                out = new Laya.Vector4();
+            if (typeof v === "number") {
+                out.setValue(v, v, v, v);
+            }
+            else if (v && typeof v === "object") {
+                out.setValue(v.r !== undefined ? v.r : (v.x !== undefined ? v.x : 0), v.g !== undefined ? v.g : (v.y !== undefined ? v.y : 0), v.b !== undefined ? v.b : (v.z !== undefined ? v.z : 0), v.a !== undefined ? v.a : (v.w !== undefined ? v.w : 0));
+            }
+            return out;
         }
     }
 
@@ -4824,6 +5128,9 @@
                         particleSystem.mainTexture = particleDesc.mainTexture || "";
                         particleSystem.subpixelAA = particleDesc.subpixelAA;
                         particleSystem.customShaderName = particleDesc.customShaderName;
+                        particleSystem.shaderPropertyBindings = particleDesc.shaderPropertyBindings || null;
+                        particleSystem.shaderPropertyDefaults = particleDesc.shaderPropertyDefaults || null;
+                        particleSystem.shaderPropertyExpressions = particleDesc.shaderPropertyExpressions || null;
                         particleSystem.billboardPrimitive = particleDesc.billboardPrimitive;
                         particleSystem.billboardVertexCount = particleDesc.billboardVertexCount;
                         particleSystem.distortionMode = particleDesc.distortionMode || "Procedural";
@@ -4916,7 +5223,7 @@
             this.globalEventAttribute = this.createEmptyEventAttribute();
             this.globalEventAttribute.setFloat("spawnCount", 1);
             this.globalEventAttribute.setVector4("color", 1, 1, 1, 1);
-            this.globalEventAttribute.setVector3("velocity", 1.5, 0, 0);
+            this.globalEventAttribute.setVector3("velocity", 0, 0, 0);
             this._propertyValues.clear();
             for (const prop of this.asset.properties) {
                 const id = Laya.Shader3D.propertyNameToID(prop.uniform);
@@ -4938,24 +5245,98 @@
                     case exports.VFXPropertyType.Gradient:
                         cached = bakeGradientTexture(prop.gradientStops || []);
                         break;
+                    case exports.VFXPropertyType.Texture2D:
+                        cached = prop.texture;
+                        break;
                 }
                 this._propertyValues.set(prop.name, {
                     id,
                     type: prop.type,
-                    value: [...v],
-                    cached
+                    value: Array.isArray(v) ? [...v] : [],
+                    cached,
+                    rawGradientStops: prop.type === exports.VFXPropertyType.Gradient ? (prop.gradientStops || []) : undefined,
+                    rawCurveFrames: prop.type === exports.VFXPropertyType.Curve ? (prop.curveFrames || []) : undefined,
                 });
-                if (prop.type === exports.VFXPropertyType.Gradient && cached) {
+                if ((prop.type === exports.VFXPropertyType.Gradient || prop.type === exports.VFXPropertyType.Texture2D) && cached) {
                     for (const sys of this.systems) {
                         if (sys instanceof VFXParticleSystem) {
+                            const bindings = sys.shaderPropertyBindings;
+                            const shaderUniformName = bindings ? bindings[prop.name] : null;
+                            const aliasIds = shaderUniformName
+                                ? [id, Laya.Shader3D.propertyNameToID(shaderUniformName)]
+                                : [id];
                             for (const sd of sys.getAllShaderDatas()) {
-                                sd.setTexture(id, cached);
+                                for (const aid of aliasIds)
+                                    sd.setTexture(aid, cached);
                             }
                         }
                     }
                 }
             }
+            for (const sys of this.systems) {
+                if (!(sys instanceof VFXParticleSystem))
+                    continue;
+                const defaults = sys.shaderPropertyDefaults;
+                if (!defaults)
+                    continue;
+                const allDatas = sys.getAllShaderDatas().slice();
+                const customShaderName = sys.customShaderName;
+                const blendMode = sys.blendMode || "Alpha";
+                if (customShaderName) {
+                    const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, blendMode);
+                    if (mat && mat.shaderData && allDatas.indexOf(mat.shaderData) === -1)
+                        allDatas.push(mat.shaderData);
+                }
+                for (const uniformName in defaults) {
+                    const entry = defaults[uniformName];
+                    if (!entry || !entry.texture)
+                        continue;
+                    const ids = [Laya.Shader3D.propertyNameToID(uniformName)];
+                    if (uniformName.startsWith("_"))
+                        ids.push(Laya.Shader3D.propertyNameToID(uniformName.substring(1)));
+                    for (const sd of allDatas) {
+                        for (const aid of ids)
+                            sd.setTexture(aid, entry.texture);
+                    }
+                }
+            }
             this.applyCurveUniforms();
+            this._applyPropertyOverrides();
+        }
+        _applyPropertyOverrides() {
+            if (!this.propertyOverrides)
+                return;
+            let overrides;
+            try {
+                overrides = typeof this.propertyOverrides === "string"
+                    ? JSON.parse(this.propertyOverrides)
+                    : this.propertyOverrides;
+            }
+            catch (e) {
+                console.warn("[VFX] failed to parse propertyOverrides JSON:", e);
+                return;
+            }
+            if (!overrides || typeof overrides !== "object")
+                return;
+            for (const name in overrides) {
+                const value = overrides[name];
+                if (!Array.isArray(value))
+                    continue;
+                switch (value.length) {
+                    case 1:
+                        this.setPropertyFloat(name, value[0]);
+                        break;
+                    case 2:
+                        this.setPropertyVec2(name, value[0], value[1]);
+                        break;
+                    case 3:
+                        this.setPropertyVec3(name, value[0], value[1], value[2]);
+                        break;
+                    case 4:
+                        this.setPropertyVec4(name, value[0], value[1], value[2], value[3]);
+                        break;
+                }
+            }
         }
         releaseAssetData() {
             for (let system of this.systems) {
@@ -4979,6 +5360,7 @@
         constructor() {
             super();
             this.randomSeed = 0;
+            this.propertyOverrides = "{}";
             this.currentSeed = 0;
             this.rand = new Laya.Rand(0);
             this.resetSeedOnPlay = true;
@@ -4994,6 +5376,7 @@
             this._skinnedMeshVertexBaked = new Set();
             this._invEmitterWorldMatrix = new Laya.Matrix4x4();
             this._propertyValues = new Map();
+            this._tmpExprVec4 = new Laya.Vector4();
             this._pause = false;
             this.initialEvent = "OnPlay";
         }
@@ -5250,6 +5633,48 @@
         }
         updateVFX() {
             this.simulateVFX();
+            this._evaluateShaderExpressions();
+        }
+        _evaluateShaderExpressions() {
+            const totalTime = this.state.totalTime;
+            const deltaTime = this.frameTime.deltaTime;
+            const propertyValues = this._propertyValues;
+            for (const sys of this.systems) {
+                if (!(sys instanceof VFXParticleSystem))
+                    continue;
+                const expressions = sys.shaderPropertyExpressions;
+                if (!expressions)
+                    continue;
+                const allDatas = sys.getAllShaderDatas().slice();
+                const customShaderName = sys.customShaderName;
+                const blendMode = sys.blendMode || "Alpha";
+                if (customShaderName) {
+                    const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, blendMode);
+                    if (mat && mat.shaderData && allDatas.indexOf(mat.shaderData) === -1)
+                        allDatas.push(mat.shaderData);
+                }
+                for (const uniformName in expressions) {
+                    const graph = expressions[uniformName];
+                    const result = ShaderExpressionEvaluator.evaluate(graph, { totalTime, deltaTime, propertyValues });
+                    if (result == null)
+                        continue;
+                    const ids = [Laya.Shader3D.propertyNameToID(uniformName)];
+                    if (uniformName.startsWith("_"))
+                        ids.push(Laya.Shader3D.propertyNameToID(uniformName.substring(1)));
+                    if (graph.outputType === "float") {
+                        const v = Number(result) || 0;
+                        for (const sd of allDatas)
+                            for (const id of ids)
+                                sd.setNumber(id, v);
+                    }
+                    else {
+                        ShaderExpressionEvaluator.toVector4(result, this._tmpExprVec4);
+                        for (const sd of allDatas)
+                            for (const id of ids)
+                                sd.setVector(id, this._tmpExprVec4);
+                    }
+                }
+            }
         }
         simulateVFX() {
             var _a, _b, _c;
@@ -5344,6 +5769,7 @@
                     }
                 }
             }
+            this._evaluateShaderExpressions();
         }
         _dispatchOutputEvent(eventName, entries) {
             const cb = this.outputEventReceived;
@@ -5691,6 +6117,7 @@
     }
     Laya.Loader.registerLoader(["lvfx"], VFXLoader, "LVFX");
 
+    exports.ShaderExpressionEvaluator = ShaderExpressionEvaluator;
     exports.VFXAsset = VFXAsset;
     exports.VFXAssetParser = VFXAssetParser;
     exports.VFXBillboardGeometry = VFXBillboardGeometry;

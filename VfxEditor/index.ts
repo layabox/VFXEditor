@@ -1,5 +1,6 @@
 import { registerAllVfxTypes } from "./data/VfxNodeDefs";
 import { componentTypes } from "./editor/ComponentTypes";
+import { VfxPropertyOverridesField } from "./editor/VfxPropertyOverridesField";
 import { VfxI18n } from "./i18n";
 import "./panels/VfxGraphPanel";
 
@@ -47,5 +48,8 @@ export class VfxExtension {
 
         registerAllVfxTypes(captionTrans, tipsTrans);
         Editor.typeRegistry.addTypes(componentTypes);
+
+        // 注册 VisualEffect 组件 Inspector 的 Properties 区域自定义渲染器
+        IEditor.InspectorRegistry.registerFieldClass("VfxPropertyOverrides", VfxPropertyOverridesField as any);
     }
 }

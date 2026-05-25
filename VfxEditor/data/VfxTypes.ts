@@ -45,6 +45,10 @@ export interface IVfxPropertyDef {
     mode?: "Default" | "Range";
     min?: number;
     max?: number;
+    /** 分组名，用于 VisualEffect 组件 Inspector 折叠展示；空/未设视为 "Default" 组 */
+    group?: string;
+    /** Inspector 友好显示名；未设回退到 name */
+    displayName?: string;
 }
 
 /** Event 实例数据（独立节点，flow 输出连接到 Context） */
