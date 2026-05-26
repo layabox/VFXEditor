@@ -924,6 +924,51 @@ export function genBlockCode(
             continue;
         }
 
+        // ── vortex (Unity VortexForceField 对齐) ──
+        // Vortex Plane: center + normal (swirl axis)
+        // 3 curves sampled by radial distance: Channel/Gravity/Vortex
+        //   Channel = 沿 axis 方向 force
+        //   Gravity = 径向 radial direction force (-值朝内)
+        //   Vortex  = 切向 tangent direction force (swirl)
+        // Drag dampening: velocity *= exp(-drag * dt / mass)
+        if (block.typeId === "vortex") {
+            if (!block.enabled) continue;
+            const vp = block.props || {};
+            const plane = vp.vortexPlane || vp.plane || { position: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 } };
+            const pos = plane.position || { x: 0, y: 0, z: 0 };
+            const nrm = plane.normal || { x: 0, y: 1, z: 0 };
+            const drag = toFloat(vp.drag ?? 0);
+            // 3 curves as { frameData: [t,v,it,ot,iw,ow,m, ...] }; 默认 2 frame (Unity 0,1 端点 value)
+            // Simplified linear interpolation between 2 frames (radialDist 当 t, clamp [0,1])
+            const getCurveFrames = (c: any) => {
+                const fd = c?.frameData || [];
+                if (fd.length >= 14) return { v0: toFloat(fd[1]), v1: toFloat(fd[8]) };
+                return { v0: "0.0", v1: "0.0" };
+            };
+            const ch = getCurveFrames(vp.channelDistance);
+            const gv = getCurveFrames(vp.gravityDistance);
+            const vx = getCurveFrames(vp.vortexDistance);
+
+            lines.push("");
+            lines.push(`    // vortex — Unity VortexForceField.cs`);
+            lines.push(`    {`);
+            lines.push(`        vec3 _vxAxis = normalize(vec3(${toFloat(nrm.x)}, ${toFloat(nrm.y)}, ${toFloat(nrm.z)}));`);
+            lines.push(`        vec3 _vxFromPlane = ${particleVar}.position - vec3(${toFloat(pos.x)}, ${toFloat(pos.y)}, ${toFloat(pos.z)});`);
+            lines.push(`        float _vxDistAlongAxis = dot(_vxAxis, _vxFromPlane);`);
+            lines.push(`        vec3 _vxRadialVec = _vxFromPlane - _vxDistAlongAxis * _vxAxis;`);
+            lines.push(`        float _vxRadialDist = length(_vxRadialVec);`);
+            lines.push(`        vec3 _vxRadialDir = _vxRadialDist > 1e-6 ? _vxRadialVec / _vxRadialDist : vec3(1.0, 0.0, 0.0);`);
+            lines.push(`        vec3 _vxTangentDir = cross(_vxAxis, _vxRadialDir);`);
+            lines.push(`        float _vxT = clamp(_vxRadialDist, 0.0, 1.0);`);   // curve sample at distance, clamp 0-1
+            lines.push(`        float _vxChannel = mix(${ch.v0}, ${ch.v1}, _vxT);`);
+            lines.push(`        float _vxGravity = mix(${gv.v0}, ${gv.v1}, _vxT);`);
+            lines.push(`        float _vxVortex = mix(${vx.v0}, ${vx.v1}, _vxT);`);
+            lines.push(`        ${particleVar}.velocity += (_vxAxis * _vxChannel + _vxRadialDir * _vxGravity + _vxTangentDir * _vxVortex) * u_DeltaTime;`);
+            lines.push(`        ${particleVar}.velocity *= exp(-${drag} * u_DeltaTime / ${particleVar}.mass);`);
+            lines.push(`    }`);
+            continue;
+        }
+
         // ── force (general) ──
         if (block.typeId === "force") {
             const result = genForceCode(block, { particleVar, compiler, contextId, simulateSpace: simulateSpace ?? "Local" });

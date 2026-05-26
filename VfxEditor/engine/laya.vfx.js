@@ -3293,8 +3293,10 @@
             this.nextTriggerTime = 0;
             this.sampledCount = 0;
         }
-        internalInit(rand) {
+        play() {
             this.sleeping = false;
+        }
+        internalInit(rand) {
             this.nextTriggerTime = sampleRange(this.delay, rand);
             this.sampledCount = Math.round(sampleRange(this.count, rand));
         }
@@ -4743,11 +4745,11 @@
                             result = pv.cached;
                         }
                         else {
-                            result = n.defaultValue;
+                            result = undefined;
                         }
                     }
                     else {
-                        result = n.defaultValue;
+                        result = undefined;
                     }
                     break;
                 }
@@ -4762,7 +4764,7 @@
                     result = Math.floor(ctx.totalTime * 60);
                     break;
                 case "GlobalTimeRatio":
-                    result = ctx.totalTime - Math.floor(ctx.totalTime);
+                    result = Math.min(ctx.totalTime, 1);
                     break;
                 case "Random": {
                     const min = Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0;
@@ -4824,6 +4826,27 @@
                     result = Math.max(0, Math.min(1, x));
                     break;
                 }
+                case "CombineVec2": {
+                    const x = Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0;
+                    const y = Number(this._evalNode(n.inputs[1], nodes, cache, ctx)) || 0;
+                    result = { x, y };
+                    break;
+                }
+                case "CombineVec3": {
+                    const x = Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0;
+                    const y = Number(this._evalNode(n.inputs[1], nodes, cache, ctx)) || 0;
+                    const z = Number(this._evalNode(n.inputs[2], nodes, cache, ctx)) || 0;
+                    result = { x, y, z };
+                    break;
+                }
+                case "CombineVec4": {
+                    const x = Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0;
+                    const y = Number(this._evalNode(n.inputs[1], nodes, cache, ctx)) || 0;
+                    const z = Number(this._evalNode(n.inputs[2], nodes, cache, ctx)) || 0;
+                    const w = Number(this._evalNode(n.inputs[3], nodes, cache, ctx)) || 0;
+                    result = { x, y, z, w };
+                    break;
+                }
                 default:
                     result = null;
             }
@@ -4832,7 +4855,7 @@
         }
         static _sampleGradient(g, t) {
             if (!g)
-                return { r: 1, g: 1, b: 1, a: 1 };
+                return null;
             const clamp = Math.max(0, Math.min(1, t));
             if (g.__layaGradientStops && Array.isArray(g.__layaGradientStops) && g.__layaGradientStops.length > 0) {
                 const stops = g.__layaGradientStops;
@@ -4887,7 +4910,9 @@
             return { r, g: g_, b, a };
         }
         static _sampleCurve(c, t) {
-            if (!c || !c.frames || c.frames.length === 0)
+            if (!c)
+                return null;
+            if (!c.frames || c.frames.length === 0)
                 return 0;
             if (c.frames.length === 1)
                 return c.frames[0].value;

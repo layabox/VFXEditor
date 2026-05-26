@@ -394,6 +394,20 @@ export const VFX_BLOCK_DEFS: IVfxBlockTypeDef[] = [
         ],
     },
     {
+        // 对齐 Unity VortexForceField — 让粒子绕 vortex plane 旋转 (swirl) + radial pull + axial channel
+        typeId: "vortex",
+        title: "Vortex",
+        category: "Force",
+        affinity: ["update"],
+        properties: [
+            { name: "vortexPlane", caption: "Vortex Plane", type: "plane", default: { position: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 } } },
+            { name: "drag", caption: "Drag", type: "number", default: 0, min: 0 },
+            { name: "channelDistance", caption: "Channel / Distance", type: "curve", default: { frameData: [0, 0, 0, 0, 0.333, 0.333, 0, 1, 0, 0, 0, 0.333, 0.333, 0] } },
+            { name: "gravityDistance", caption: "Gravity / Distance", type: "curve", default: { frameData: [0, 0, 0, 0, 0.333, 0.333, 0, 1, 0, 0, 0, 0.333, 0.333, 0] } },
+            { name: "vortexDistance", caption: "Vortex / Distance", type: "curve", default: { frameData: [0, 0, 0, 0, 0.333, 0.333, 0, 1, 0, 0, 0, 0.333, 0.333, 0] } },
+        ],
+    },
+    {
         // 对齐 Unity ConformToAABox.cs — 把粒子吸附到 AABox 表面
         typeId: "conformToAABox",
         title: "Conform to AABox",
