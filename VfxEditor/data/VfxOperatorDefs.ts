@@ -228,7 +228,10 @@ const COMPOSITE_TYPE_INFO: Record<string, ICompositeTypeInfo> = {
     // 复合类型
     transform: {
         glslType: "mat4",
-        construct: (f) => `BuildTRS(${f[0]}, ${f[1]}, ${f[2]})`,
+        // Unity Transform.angles 是度数, BuildTRS 内部直接 cos/sin 当弧度.
+        // _resolveInput composite type construct 时必须 radians() 转换, 否则 vec3(90,0,0) 当 90 rad ≈ 14 圈让 matrix 完全错.
+        // (ShapePosition / Force block 等其他调用方在自己模板里已经 wrap radians 这里不会双重转换)
+        construct: (f) => `BuildTRS(${f[0]}, radians(${f[1]}), ${f[2]})`,
         zero: "mat4(1.0)",
         structAccess: false,
         extractComponent: {

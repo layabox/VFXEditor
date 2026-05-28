@@ -1571,6 +1571,45 @@ export class VfxExprCompiler {
         const key = `${op.id}:${inputSlotId}`;
         const source = this._reverseIndex.get(key);
 
+        // ── composite type inline default + sub-slot link 合并 ──
+        // 转换器写 _inputs.matrix = {position, angles/rotation, scale} 给 transformPosition 的 transform input,
+        // _vecLiteral 不支持 composite type 走 default case 让 val.x undefined → 0.0 → matrix=0 让 position=0.
+        // 同时 Unity branch op output 可能接到 transform sub-slot (e.g. matrix_angles_y), 此时需要 inline default
+        // 跟 sub-slot link 合并: BuildTRS(inline_pos, vec3(0, branch_output, 0), inline_scale).
+        // (Unity field name "angles" 跟 IDE "rotation" 不一致, 兜底)
+        if (!source) {
+            const compInfo = getCompositeTypeInfo(resolvedType);
+            const compComps = (TYPE_COMPONENTS as any)[resolvedType];
+            if (compInfo && compComps) {
+                const inputs = op.props?._inputs as Record<string, any> | undefined;
+                let inputVal = inputs?.[inputSlotId];
+                if (resolvedType === "transform" && inputVal && inputVal.angles != null && inputVal.rotation == null) {
+                    inputVal = { ...inputVal, rotation: inputVal.angles };
+                }
+                // 收集每个 composite 子分量 (e.g. transform.position/rotation/scale 各 vec3) 的 expr —
+                // 优先 sub-slot link, fallback inline default, 最终 zero
+                const fieldExprs: string[] = [];
+                let hasAnySubLink = false;
+                for (const comp of compComps) {
+                    // 子分量本身可能含嵌套 sub-slot (e.g. matrix_angles_y for transform.angles vec3),
+                    // 这里递归调用 _resolveInput 让 vec3 sub-slot detection 路径处理
+                    const subKey = `${inputSlotId}_${comp.id.toLowerCase()}`;
+                    // 检查 sub-slot 直接 link 或子分量 link (e.g. matrix_angles_y 存在)
+                    const directLink = this._reverseIndex.get(`${op.id}:${subKey}`);
+                    const childLinks = ["x", "y", "z", "w"].some(c => this._reverseIndex.get(`${op.id}:${subKey}_${c}`));
+                    if (directLink || childLinks) hasAnySubLink = true;
+                    // 把子分量 inline default 临时塞进 _inputs 让递归 _resolveInput 拿到
+                    const fakeOp = { ...op, props: { ...op.props,
+                        _inputs: { ...inputs, [subKey]: inputVal?.[comp.id] } as any } } as IVfxOperatorData;
+                    const fakeDef = { ...def, inputs: [{ id: subKey, name: subKey, type: comp.type }] } as any;
+                    fieldExprs.push(this._resolveInput(fakeOp, fakeDef, subKey, comp.type));
+                }
+                if (hasAnySubLink || (inputVal != null && typeof inputVal === "object")) {
+                    return compInfo.construct(fieldExprs);
+                }
+            }
+        }
+
         // ── 子 slot 合并（Unity vec2 input 接子 slot .x/.y） ──
         // Unity vfx 拓扑常见：sampleTexture2D.uv.x ← OneMinus.out, sampleTexture2D.uv.y ← linearRemap.y
         // 转换器输出两条 link 接同一 master "uv" slot 让后写覆盖前写丢失 .x。
@@ -1585,6 +1624,16 @@ export class VfxExprCompiler {
             const sz = this._reverseIndex.get(zKey);
             const sw = this._reverseIndex.get(wKey);
             if (sx || sy || sz || sw) {
+                // sub-slot fallback 应该读 inline default 子分量 (inputs.<slot>.x/.y/.z), 不能死 "0.0"
+                // 否则部分 sub-slot link 让另外 inline 分量丢失 (e.g. transform.rotation.y ← branch 让
+                // rotation.x=90 inline 变 0)
+                const inlineVec = (op.props?._inputs as Record<string, any>)?.[inputSlotId];
+                const inlineFallback = (axis: string): string => {
+                    if (inlineVec && typeof inlineVec === "object" && inlineVec[axis] != null) {
+                        return toFloat(Number(inlineVec[axis]) || 0);
+                    }
+                    return "0.0";
+                };
                 const compileSub = (s: ISourceInfo | undefined, fallback: string): string => {
                     if (!s) return fallback;
                     let e = this._compileOutput(s.opId, s.outSlotId);
@@ -1592,12 +1641,12 @@ export class VfxExprCompiler {
                     if (t !== "float") e = this._wrapTypeConvert(e, t, "float");
                     return e;
                 };
-                const xExpr = compileSub(sx, "0.0");
-                const yExpr = compileSub(sy, "0.0");
+                const xExpr = compileSub(sx, inlineFallback("x"));
+                const yExpr = compileSub(sy, inlineFallback("y"));
                 if (resolvedType === "vec2") return `vec2(${xExpr}, ${yExpr})`;
-                const zExpr = compileSub(sz, "0.0");
+                const zExpr = compileSub(sz, inlineFallback("z"));
                 if (resolvedType === "vec3") return `vec3(${xExpr}, ${yExpr}, ${zExpr})`;
-                const wExpr = compileSub(sw, "0.0");
+                const wExpr = compileSub(sw, inlineFallback("w"));
                 return `vec4(${xExpr}, ${yExpr}, ${zExpr}, ${wExpr})`;
             }
         }

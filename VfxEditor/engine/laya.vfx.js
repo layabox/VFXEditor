@@ -1734,7 +1734,7 @@
 
     var VFXRenderVertexGLSL = "\n#include \"VFXRenderCommon.glsl\";\nvec3 rotateByQuat(vec3 v,vec4 q){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}VFXParticle getVFXParticle(){VFXParticle p;p.position=a_AttrPosition.xyz;p.normalizedAge=a_AttrPosition.w;p.color=a_AttrColor;p.rotation=a_AttrRotation;p.scale=a_AttrScale.xyz;p.texIndex=a_AttrScale.w;p.pivot=a_AttrPivot.xyz;return p;}VFXParticle vfxProcessVertex(inout Vertex vertex){VFXParticle p=getVFXParticle();vec3 v=vertex.positionOS-p.pivot;v=v*p.scale;v=rotateByQuat(v,p.rotation);vertex.positionOS=v+p.position;return p;}vec3 vfxWorldPosition(Vertex vertex,mat4 worldMat){vec4 pos=worldMat*vec4(vertex.positionOS,1.0);return pos.xyz/pos.w;}";
 
-    var BlueprintPixelVertexVFXGLSL = "#if !defined(BlueprintPixelVertexVFX_lib)\n#define BlueprintPixelVertexVFX_lib\n#include \"shaderBlueprint/lib/BlueprintPixel.glsl\";\n#ifdef VFX_INSTANCED\nvarying float v_TexIndex;struct VFXParticle{vec3 position;float normalizedAge;vec4 color;vec4 rotation;vec3 scale;float texIndex;vec3 pivot;};vec3 vfxRotateByQuat(vec3 v,vec4 q){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}VFXParticle vfxGetParticle(){VFXParticle p;p.position=a_AttrPosition.xyz;p.normalizedAge=a_AttrPosition.w;p.color=a_AttrColor;p.rotation=a_AttrRotation;p.scale=a_AttrScale.xyz;p.texIndex=a_AttrScale.w;p.pivot=a_AttrPivot.xyz;return p;}VFXParticle vfxTransformVertex(inout Vertex vertex){VFXParticle p=vfxGetParticle();v_TexIndex=p.texIndex;vec3 vp=vertex.positionOS-p.pivot;vp=vp*p.scale;vp=vfxRotateByQuat(vp,p.rotation);vertex.positionOS=vp+p.position;vertex.normalOS=vfxRotateByQuat(vertex.normalOS,p.rotation);\n#ifdef TANGENT\nvec3 t=vfxRotateByQuat(vertex.tangentOS.xyz,p.rotation);vertex.tangentOS=vec4(t,vertex.tangentOS.w);\n#endif\n#ifdef COLOR\nvertex.vertexColor.r*=p.color.r;vertex.vertexColor.g*=p.color.g;vertex.vertexColor.b=p.color.b;vertex.vertexColor.a*=p.color.a;\n#endif\nreturn p;}\n#endif\n#endif\n";
+    var BlueprintPixelVertexVFXGLSL = "#if !defined(BlueprintPixelVertexVFX_lib)\n#define BlueprintPixelVertexVFX_lib\n#include \"shaderBlueprint/lib/BlueprintPixel.glsl\";\n#ifdef VFX_INSTANCED\nvarying float v_TexIndex;varying float v_NormalizedAge;struct VFXParticle{vec3 position;float normalizedAge;vec4 color;vec4 rotation;vec3 scale;float texIndex;vec3 pivot;};vec3 vfxRotateByQuat(vec3 v,vec4 q){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}VFXParticle vfxGetParticle(){VFXParticle p;p.position=a_AttrPosition.xyz;p.normalizedAge=a_AttrPosition.w;p.color=a_AttrColor;p.rotation=a_AttrRotation;p.scale=a_AttrScale.xyz;p.texIndex=a_AttrScale.w;p.pivot=a_AttrPivot.xyz;return p;}VFXParticle vfxTransformVertex(inout Vertex vertex){VFXParticle p=vfxGetParticle();v_TexIndex=p.texIndex;v_NormalizedAge=p.normalizedAge;vec3 vp=vertex.positionOS-p.pivot;vp=vp*p.scale;vp=vfxRotateByQuat(vp,p.rotation);vertex.positionOS=vp+p.position;vertex.normalOS=vfxRotateByQuat(vertex.normalOS,p.rotation);\n#ifdef TANGENT\nvec3 t=vfxRotateByQuat(vertex.tangentOS.xyz,p.rotation);vertex.tangentOS=vec4(t,vertex.tangentOS.w);\n#endif\n#ifdef COLOR\nvertex.vertexColor.r*=p.color.r;vertex.vertexColor.g*=p.color.g;vertex.vertexColor.b=p.color.b;vertex.vertexColor.a*=p.color.a;\n#endif\nreturn p;}\n#endif\n#endif\n";
 
     class VFXShaderInit {
         static init() {
@@ -4764,7 +4764,9 @@
                     result = Math.floor(ctx.totalTime * 60);
                     break;
                 case "GlobalTimeRatio":
-                    result = Math.min(ctx.totalTime, 1);
+                    result = ctx.hasContinuousSpawn
+                        ? (ctx.totalTime - Math.floor(ctx.totalTime))
+                        : Math.min(ctx.totalTime, 1);
                     break;
                 case "Random": {
                     const min = Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0;
@@ -5661,9 +5663,24 @@
             this._evaluateShaderExpressions();
         }
         _evaluateShaderExpressions() {
+            var _a;
             const totalTime = this.state.totalTime;
             const deltaTime = this.frameTime.deltaTime;
             const propertyValues = this._propertyValues;
+            let hasContinuousSpawn = false;
+            for (const sys of this.systems) {
+                if (!(sys instanceof VFXSpawnerSystem))
+                    continue;
+                for (const task of sys.tasks) {
+                    const cn = ((_a = task.constructor) === null || _a === void 0 ? void 0 : _a.name) || "";
+                    if (cn === "VFXSpawnerConstantRate" || cn === "VFXSpawnerPeriodicBurst" || cn === "VFXSpawnerVariableRate") {
+                        hasContinuousSpawn = true;
+                        break;
+                    }
+                }
+                if (hasContinuousSpawn)
+                    break;
+            }
             for (const sys of this.systems) {
                 if (!(sys instanceof VFXParticleSystem))
                     continue;
@@ -5680,7 +5697,7 @@
                 }
                 for (const uniformName in expressions) {
                     const graph = expressions[uniformName];
-                    const result = ShaderExpressionEvaluator.evaluate(graph, { totalTime, deltaTime, propertyValues });
+                    const result = ShaderExpressionEvaluator.evaluate(graph, { totalTime, deltaTime, propertyValues, hasContinuousSpawn });
                     if (result == null)
                         continue;
                     const ids = [Laya.Shader3D.propertyNameToID(uniformName)];
