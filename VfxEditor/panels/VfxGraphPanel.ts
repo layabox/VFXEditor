@@ -153,6 +153,15 @@ export class VfxGraphPanel extends IEditor.EditorPanel implements IVfxHost {
         return this._scene.save();
     }
 
+    /**
+     * 编辑器关闭 / 面板销毁前由 PanelManager 自动调用。
+     * 仅在有未保存改动时落盘，避免无文件 / 无改动时刷无谓日志。
+     */
+    async onSave(): Promise<void> {
+        if (this._scene?.isModified)
+            await this._scene.save();
+    }
+
     /** 由 VfxScenePanel 通过 IVfxHost.updateTitle 回调 */
     updateTitle(fileName: string, modified: boolean): void {
         if (!this._titleLabel) return;
