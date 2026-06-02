@@ -1564,11 +1564,9 @@ export class VfxExprCompiler {
             }
         }
 
-        // rotate3D 在 update 阶段作累积旋转（每帧 position = rotate3D(position, angle)）时，angle 是
-        // per-frame 增量、帧率相关；而同 context 的 gravity 等是 dt 归一(帧率无关)。Laya 预览帧率
-        // (~57fps) 远低于 Unity 编辑器(常 200+)，导致公转被拖慢、被 gravity 垂直漂移压倒 → strip 成竖直短线
-        // 而非 Unity 的长横弧。dt 归一让公转角速度 = angle * ORBIT_FPS rad/s，与实际帧率解耦、对齐 Unity。
-        // ORBIT_FPS 是校准旋钮：值越大公转越快(每条 strip 扫的弧越长)。仅 update 阶段(init 一次性旋转不动)。
+        // rotate3D 在 update 阶段作累积旋转时 angle 是 per-frame 增量、帧率相关；而 gravity 等是 dt 归一。
+        // Laya 预览帧率远低于 Unity 编辑器 → 公转被拖慢、被 gravity 垂直漂移压倒 → strip 不水平转、直接上升。
+        // dt 归一让公转角速度 = angle * ORBIT_FPS rad/s 与帧率解耦、恢复水平公转。仅 update 阶段。
         if (op.typeId === "rotate3D" && this._stage === "update" && inputs.angle) {
             const ORBIT_FPS = 360.0;
             inputs.angle = `((${inputs.angle}) * u_DeltaTime * ${ORBIT_FPS})`;
