@@ -942,6 +942,13 @@ export class VfxBuild {
                     result.push({ name: "velocity", type: "vec3", usage: "set", stage: ctx.typeId, composition: "Add" });
                     result.push({ name: "position", type: "vec3", usage: "get", stage: ctx.typeId });
                     result.push({ name: "mass", type: "float", usage: "get", stage: ctx.typeId });
+                } else if (block.typeId === "vortex") {
+                    // vortex (Unity VortexForceField)：p.velocity += (axis*channel + radial*gravity + tangent*vortex)*dt
+                    // 然后 p.velocity *= exp(-drag*dt / p.mass)（BlockCodeGenCommon vortex codegen）
+                    // 需读 position（按径向距离采曲线）/ 写 velocity / 读 mass，漏注册 mass → 'no such field mass' 编译失败
+                    result.push({ name: "velocity", type: "vec3", usage: "set", stage: ctx.typeId, composition: "Add" });
+                    result.push({ name: "position", type: "vec3", usage: "get", stage: ctx.typeId });
+                    result.push({ name: "mass", type: "float", usage: "get", stage: ctx.typeId });
                 } else if (block.typeId === "force") {
                     result.push({ name: "velocity", type: "vec3", usage: "set", stage: ctx.typeId, composition: "Add" });
                     // force shader 不论 Absolute / Relative 都用 p.mass（velocity += force/mass*dt 或 (target-velocity)*min(1, drag*dt/mass)）

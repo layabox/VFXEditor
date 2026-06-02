@@ -177,9 +177,9 @@ export class VfxShaderGen {
         const attrNames = new Set(attributes.map(a => a.name));
 
         // 为每个 shader stage 创建独立的表达式编译器
-        const initCompiler = new VfxExprCompiler(operators, "particle", graphProperties, space);
-        const updateCompiler = new VfxExprCompiler(operators, "p", graphProperties, space);
-        const outputCompiler = new VfxExprCompiler(operators, "p", graphProperties, space);
+        const initCompiler = new VfxExprCompiler(operators, "particle", graphProperties, space, "init");
+        const updateCompiler = new VfxExprCompiler(operators, "p", graphProperties, space, "update");
+        const outputCompiler = new VfxExprCompiler(operators, "p", graphProperties, space, "output");
 
         // Detect strip mode for ring buffer
         const isNone = _outputCtx.typeId === "none";

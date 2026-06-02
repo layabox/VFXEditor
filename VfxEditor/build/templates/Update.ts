@@ -216,7 +216,14 @@ ${blockCode}
 
     ${dtIndent}// 3. Update particle (implicit behavior)
     ${dtIndent}updateParticle(p, u_DeltaTime);${dtGuardClose}
-
+${attrNames?.has("headDeathTime") ? `
+    // strip 随头部(发射器)死亡一起消失：头部死后清掉本 generation 的 trail 粒子，
+    // 避免 strip 槽位被同 index 新发射器复用时，新旧两代 trail 混在同一 ring buffer 被 ribbon
+    // 连成折线/跳变(对齐 Unity strip 随 head 死)。headDeathTime>0 兜底防 SimpleTrail 误杀。
+    if (p.headDeathTime > 0.0 && u_TotalTime > p.headDeathTime) {
+        p.alive = false;
+    }
+` : ""}
     // 4. Write back particle data
     writeParticle(particleIndex, p);
     if (p.alive) {

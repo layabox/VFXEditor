@@ -392,16 +392,19 @@ export class VfxExprCompiler {
     private _needsSeqMirror: boolean = false;   // sequential* Mirror 模式需要 helper
     private _skinnedMeshSources: Set<string>;   // "sourceName|position" / "sourceName|normal" 标记需要的 helper
     private _customCodeFunctions: Map<number, string>;   // opId → 用户 GLSL 代码（包装为函数后注入 shader prelude）
+    private _stage: string;   // "init" | "update" | "output" — 用于 stage 相关 codegen（如 update 阶段 rotate3D dt 归一）
 
     constructor(
         operators: IVfxOperatorData[],
         particleVar: string,
         graphProperties?: IVfxPropertyDef[],
         simulateSpace?: string,
+        stage?: string,
     ) {
         this._particleVar = particleVar;
         this._graphProperties = graphProperties || [];
         this._simulateSpace = simulateSpace || "Local";
+        this._stage = stage || "";
         this._statements = [];
         this._compiled = new Map();
         this._visiting = new Set();
@@ -1395,6 +1398,11 @@ export class VfxExprCompiler {
         // (对齐 Unity Random Float (Per Particle Strip) — 同 stripIndex 同值)
         const seedMode = (op.props as any)?.seed as string;
         const inlineSeed = Number((op.props as any)?._inputs?.seed) || 0;
+        // Unity constant=true (Per Particle): 每粒子固定一次随机值、跨帧稳定。
+        // 必须用 FixedRand(无状态纯函数) 而非 Rand(推进 seed → 每帧/每次调用重roll)，否则
+        // update 阶段每帧读到不同值（如 rotate3D 轨道角速度逐帧抖动）。op.id 区分不同 operator。
+        const isConstant = (op.props as any)?.constant === true;
+        const opOffset = (Number((op as any).id) || 0) >>> 0;
         const seedExpr = seedMode === "PerParticleStrip"
             ? `WangHash(${this._particleVar}.stripIndex + ${inlineSeed >>> 0}u)`
             : `${this._particleVar}.seed`;
@@ -1403,6 +1411,9 @@ export class VfxExprCompiler {
             // 而 PerParticleStrip 期望同 stripIndex 永远同值 — 用 PerParticleStrip 时直接用 hash 转 [0,1)
             if (seedMode === "PerParticleStrip") {
                 return `mix(${minExpr}, ${maxExpr}, float(${seedExpr}) / 4294967295.0)`;
+            }
+            if (isConstant) {
+                return `mix(${minExpr}, ${maxExpr}, FixedRand(${this._particleVar}.seed + ${opOffset}u))`;
             }
             return `mix(${minExpr}, ${maxExpr}, Rand(${this._particleVar}.seed))`;
         }
@@ -1417,7 +1428,9 @@ export class VfxExprCompiler {
         }
         const comps = [];
         for (let i = 0; i < dim; i++) {
-            comps.push(`Rand(${this._particleVar}.seed)`);
+            comps.push(isConstant
+                ? `FixedRand(${this._particleVar}.seed + ${(opOffset + i * 0x9E3779B9) >>> 0}u)`
+                : `Rand(${this._particleVar}.seed)`);
         }
         const randType = dim === 2 ? "vec2" : dim === 3 ? "vec3" : "vec4";
         return `mix(${minExpr}, ${maxExpr}, ${randType}(${comps.join(", ")}))`;
@@ -1549,6 +1562,16 @@ export class VfxExprCompiler {
                 for (const e of extras) cascade = `(${cascade} ${operator} ${e})`;
                 return cascade;
             }
+        }
+
+        // rotate3D 在 update 阶段作累积旋转（每帧 position = rotate3D(position, angle)）时，angle 是
+        // per-frame 增量、帧率相关；而同 context 的 gravity 等是 dt 归一(帧率无关)。Laya 预览帧率
+        // (~57fps) 远低于 Unity 编辑器(常 200+)，导致公转被拖慢、被 gravity 垂直漂移压倒 → strip 成竖直短线
+        // 而非 Unity 的长横弧。dt 归一让公转角速度 = angle * ORBIT_FPS rad/s，与实际帧率解耦、对齐 Unity。
+        // ORBIT_FPS 是校准旋钮：值越大公转越快(每条 strip 扫的弧越长)。仅 update 阶段(init 一次性旋转不动)。
+        if (op.typeId === "rotate3D" && this._stage === "update" && inputs.angle) {
+            const ORBIT_FPS = 360.0;
+            inputs.angle = `((${inputs.angle}) * u_DeltaTime * ${ORBIT_FPS})`;
         }
 
         const gen = GLSL_EXPRS[op.typeId];

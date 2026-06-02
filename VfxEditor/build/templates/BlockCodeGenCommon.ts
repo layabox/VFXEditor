@@ -964,7 +964,8 @@ export function genBlockCode(
             lines.push(`        float _vxGravity = mix(${gv.v0}, ${gv.v1}, _vxT);`);
             lines.push(`        float _vxVortex = mix(${vx.v0}, ${vx.v1}, _vxT);`);
             lines.push(`        ${particleVar}.velocity += (_vxAxis * _vxChannel + _vxRadialDir * _vxGravity + _vxTangentDir * _vxVortex) * u_DeltaTime;`);
-            lines.push(`        ${particleVar}.velocity *= exp(-${drag} * u_DeltaTime / ${particleVar}.mass);`);
+            lines.push(`        float _vxMass = ${particleVar}.mass > 0.0 ? ${particleVar}.mass : 1.0;`);
+            lines.push(`        ${particleVar}.velocity *= exp(-${drag} * u_DeltaTime / _vxMass);`);
             lines.push(`    }`);
             continue;
         }
