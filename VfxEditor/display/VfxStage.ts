@@ -93,6 +93,11 @@ export class VfxStage extends gui.Widget {
         this._cont = new gui.Widget();
         this._cont.touchThrough = true;
         this.addChild(this._cont);
+        // 滚轮缩放时 _cont 会被施加 CSS transform: scaleX/scaleY（editor-ui 纯 DOM 渲染）。
+        // 把它提升为独立 GPU 合成层，缩放变成合成器变换而非整棵 DOM 子树（含巨型 SVG 连线层）
+        // 重新栅格化——重栅格期间合成器继续显示旧位图，消除内容闪烁（蓝图节点 DOM 简单不明显）。
+        this._cont.element.style.willChange = "transform";
+        this._cont.element.style.backfaceVisibility = "hidden";
 
         // SVG 连线层
         this._lineContainer = new gui.Widget();
@@ -104,6 +109,9 @@ export class VfxStage extends gui.Widget {
         this.lineSVG.node.style.left = `${-(VfxStage.SVG_SIZE * 0.5)}px`;
         this.lineSVG.node.style.top = `${-(VfxStage.SVG_SIZE * 0.5)}px`;
         this.lineSVG.node.style.position = "absolute";
+        // 巨型 SVG（10万像素）单独提升为合成层，避免随 _cont 缩放被反复重栅格化
+        this.lineSVG.node.style.willChange = "transform";
+        this.lineSVG.node.style.backfaceVisibility = "hidden";
 
         // 框选矩形
         this._selectBox = new gui.Shape();
@@ -1194,6 +1202,13 @@ export class VfxStage extends gui.Widget {
         const scaleOffsetY = ((oldY - result.y) / oldScale) * scaleDelta;
         this._cont.x = oldX + scaleOffsetX;
         this._cont.y = oldY + scaleOffsetY;
+
+        // ★ 防跳动核心：editor-ui 里 x/y(style.left/top) 立即生效，而 scaleX/scaleY 的
+        // CSS transform 走 Timers.callLater 延迟到下一帧 flush。新 x/y 是按【新 scale】算的，
+        // 却先于 transform 生效 → 这一帧位置对、缩放还是旧值 → 整个 _cont(节点+SVG连线)跳动，
+        // 下一帧 transform flush 才校正回来。这里强制同帧同步刷新 transform，让缩放与位移原子更新。
+        const contEl: any = this._cont.element;
+        if (contEl && typeof contEl.updateTransform === "function") contEl.updateTransform();
     }
 
     private _onKeyDown(e: gui.Event): void {
