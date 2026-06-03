@@ -217,10 +217,11 @@ ${blockCode}
     ${dtIndent}// 3. Update particle (implicit behavior)
     ${dtIndent}updateParticle(p, u_DeltaTime);${dtGuardClose}
 ${attrNames?.has("headDeathTime") ? `
-    // strip 随头部(发射器)死亡一起消失：清旧 generation 防折角 + 让 trail 贴平面"转"不被 gravity 升离。
-    if (p.headDeathTime > 0.0 && u_TotalTime > p.headDeathTime) {
-        p.alive = false;
-    }
+    // [已移除 instant-kill] 原先 head(发射器)一死就把整条 strip 全部 alive=false →
+    // 几何同帧整条抹掉，残留 alpha 的 ribbon"啪"地消失，很突兀(与 Unity 渐隐不符)。
+    // 折角(chord)现已由 OutputStrip 渲染端 chord-cut 处理，不再需要靠 kill 清旧 generation。
+    // 让 trail 粒子按自身 lifetime 自然老化消亡 → strip 渐隐(对齐 Unity)。
+    // head 死后 head-based normalizedAge 钳到 1 → alphaOverLife=0，残留粒子 alpha 0 不可见无副作用。
 ` : ""}
     // 4. Write back particle data
     writeParticle(particleIndex, p);

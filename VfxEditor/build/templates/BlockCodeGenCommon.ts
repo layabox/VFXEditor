@@ -595,7 +595,10 @@ export function genBlockCode(
                 lines.push("");
                 lines.push(`    // setPositionShape (Circle, ${posMode}) — Unity PositionCircle.cs`);
                 lines.push(`    {`);
-                lines.push(`        uint _ccSeed = WangHash(particleIndex ^ uint(u_SystemSeed) ^ 0x9F1Bu);`);
+                // 种子用全局递增 spawn 索引 (id + u_TotalSpawnedCount)，不能只用 particleIndex：
+                // particleIndex 来自 DeadList 回收槽位，稳态只复用 ~5-6 个槽 → 只算出 ~5-6 个固定角度反复用
+                // → emitter 聚成簇。Unity 用 per-spawn 递增种子，每次生成都是新角 → 随时间铺满整圈。
+                lines.push(`        uint _ccSeed = WangHash((id + uint(u_TotalSpawnedCount)) ^ uint(u_SystemSeed) ^ 0x9F1Bu);`);
                 lines.push(`        float _ccTheta = 6.28318530718 * Rand(_ccSeed);`);
                 lines.push(`        float _ccRNorm = sqrt(${volumeFactor} + (1.0 - ${volumeFactor}) * Rand(_ccSeed));`);
                 lines.push(`        vec3 _ccDir = vec3(sin(_ccTheta), cos(_ccTheta), 0.0);`);

@@ -194,8 +194,10 @@ ${isGPUEvent ? `    // Head lifecycle sync: normalizedAge based on HEAD's age fo
 
 ${worldToLocal}${blockLines}    float halfWidth = max(${size}, 0.001) * ${scale}.x * 0.5;
 
-${isGPUEvent ? `    // HeadTrail taper: tail thin, head wide (teardrop shape)
-    halfWidth *= stripRatio * stripRatio;` : `    // SimpleTrail: size controlled entirely by blocks (size over life curve)`}
+${isGPUEvent ? `    // HeadTrail taper: 头宽尾窄，但尾部保留下限宽度(0.4)不收成尖点。
+    // 原来 stripRatio*stripRatio 把尾宽收到 0 → 又细又尖的薄刃(与 Unity 饱满羽毛状不符)。
+    // 改为线性 mix(0.4,1.0,stripRatio): 尾部仍 40% 宽，柔淡出交给 alpha *= stripRatio。
+    halfWidth *= mix(0.4, 1.0, stripRatio);` : `    // SimpleTrail: size controlled entirely by blocks (size over life curve)`}
 
     // Face Camera Position orient (matches Unity VFX strip orient)
     vec3 localCameraPos = transformPosition(u_InvEmitterWorldMatrix, u_OrientCameraPos);
@@ -204,22 +206,41 @@ ${isGPUEvent ? `    // HeadTrail taper: tail thin, head wide (teardrop shape)
     // 对齐 Unity vertex shader 行为: axis (来自 update orient block) 用 simulation tangent;
     // vertex pos = attributes.position (modified) + axis (simulation) * vOffset
     vec3 tangent = vec3(0.0);
+    float _fwdLen = -1.0;
+    float _bwdLen = -1.0;
     if (tid + 1u < particleCount) {
         uint nextIdx = stripIndex * ppsc + (firstIndex + tid + 1u) % ppsc;
         Particle nP = readParticle(nextIdx);
 ${worldToLocalNeighbor}        vec3 fwd = nP.position - _simPos;
-        float fwdLen = length(fwd);
-        if (fwdLen > 1e-6) tangent += fwd / fwdLen;
+        _fwdLen = length(fwd);
+        if (_fwdLen > 1e-6) tangent += fwd / _fwdLen;
     }
     if (tid > 0u) {
         uint prevIdx = stripIndex * ppsc + (firstIndex + tid - 1u) % ppsc;
         Particle nP = readParticle(prevIdx);
 ${worldToLocalNeighbor}        vec3 bwd = _simPos - nP.position;
-        float bwdLen = length(bwd);
-        if (bwdLen > 1e-6) tangent += bwd / bwdLen;
+        _bwdLen = length(bwd);
+        if (_bwdLen > 1e-6) tangent += bwd / _bwdLen;
     }
     float tangentLen = length(tangent);
     tangent = (tangentLen > 1e-6) ? tangent / tangentLen : vec3(0.0, 1.0, 0.0);
+
+    // ── Chord cut (generation/wrap 隔离) ──
+    // ring buffer 窗口中段若混进跨代/环回/陈旧槽位的粒子，会和邻居形成一条异常长的连线(chord)。
+    // 判据：某侧相邻段长 > 5× 另一侧(局部突变) → 判定本粒子是 chord 端点，collapse 成单点(top==bot)。
+    // chord 两端粒子都会命中 → 它们之间的 quad 4 顶点退化为 0 面积自动隐形，消除 TrailsWide 那条长亮直线。
+    // 均匀 ribbon(VFX11 TrailsThin 等段长接近)两侧比值≈1，永不触发 → 不影响已验证特效。
+    if (_fwdLen > 1e-6 && _bwdLen > 1e-6 && (_fwdLen > 5.0 * _bwdLen || _bwdLen > 5.0 * _fwdLen)) {
+        Render.data[stripVertBase + 0u] = vec4(p.position, 1.0);
+        Render.data[stripVertBase + 1u] = vec4(0.0);
+        Render.data[stripVertBase + 2u] = vec4(0.0);
+        Render.data[stripVertBase + 3u] = vec4(0.0);
+        Render.data[stripVertBase + 4u] = vec4(p.position, 1.0);
+        Render.data[stripVertBase + 5u] = vec4(0.0);
+        Render.data[stripVertBase + 6u] = vec4(0.0);
+        Render.data[stripVertBase + 7u] = vec4(0.0);
+        return;
+    }
 
     // toCamRaw 用 simulation 让 right vector 始终基于 simulation 几何 (跟 tangent 一致, 不被 noise drift 影响)
     vec3 toCamRaw = _simPos - localCameraPos;
