@@ -1567,8 +1567,15 @@ export class VfxExprCompiler {
         // rotate3D 在 update 阶段作累积旋转时 angle 是 per-frame 增量、帧率相关；而 gravity 等是 dt 归一。
         // Laya 预览帧率远低于 Unity 编辑器 → 公转被拖慢、被 gravity 垂直漂移压倒 → strip 不水平转、直接上升。
         // dt 归一让公转角速度 = angle * ORBIT_FPS rad/s 与帧率解耦、恢复水平公转。仅 update 阶段。
+        // 注意：ORBIT_FPS 只影响 strip(rotate3D 公转)，不影响 disc 环(disc 靠 _MainTextureOffset UV 滚动旋转)。
+        // Unity 源码确认 Rotate3D 无 dt(逐帧累积)+ EulerIntegration 有 dt → orbit 速度本就依赖 Unity 运行帧率，
+        // 没有源码常量可对，ORBIT_FPS 是匹配 Unity 帧率的经验值。实测：60 太慢→被 gravity 压成直刺；360→弧太长 sprawl。
+        // 取值逼近"用户 Unity 参考帧率"，需与 gravity 上升平衡成"边绕边升"的螺旋：
+        //   180(82°/s)→ orbit 太弱被 gravity 压成竖直尖刺；300(137°/s)→ orbit 太强压平成贴 rim 大弧。
+        //   Unity 参考是中等 pitch 上升螺旋 → 取中间 240(109°/s)：水平绕圈与垂直上升平衡。
+        // VFX14 共用同一 -0.008 orbit，会同步变更协调。
         if (op.typeId === "rotate3D" && this._stage === "update" && inputs.angle) {
-            const ORBIT_FPS = 360.0;
+            const ORBIT_FPS = 240.0;
             inputs.angle = `((${inputs.angle}) * u_DeltaTime * ${ORBIT_FPS})`;
         }
 

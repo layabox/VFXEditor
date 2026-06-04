@@ -281,6 +281,30 @@ export class VfxBuild {
             return VfxBuild._collectAttributes([...spawnCtxs, ps.initCtx, ps.updateCtx, ...ps.outputCtxs], operators);
         });
 
+        // 8b. Strip 跨代复用根因修复：strip trail 的 stripIndex 必须按"稳定的单调 head-ID"分配，
+        //     而非可复用的 sourceParticleIndex(emitter buffer 槽位 LIFO 立即复用 → 新老两代挤进同一 strip
+        //     → chord-cut 截断 + 环回覆盖 → strip 硬截断/碎片，而非 Unity 的逐 head 干净 ribbon 缩放收尾)。
+        //     emitter(CPU init)的 particleId = id + u_TotalSpawnedCount 是 init 设定一次的稳定全局单调值,
+        //     正好做 head-ID。这里强制 strip trail(接收端读 src.particleId)及其 source emitter(打包 particleId)
+        //     都带上 particleId，让 trail init 用 src.particleId % stripCapacity 分配 strip(见 Initialize.ts)。
+        for (let pi = 0; pi < validParticles.length; pi++) {
+            const ps = validParticles[pi];
+            const hasStripOutput = ps.outputCtxs.some(c => c.typeId === "outputTrail" || c.typeId === "outputLineStrip");
+            if (!hasStripOutput) continue;
+            const gei = VfxBuild._resolveGPUEventInput(ps.initCtx, gpuEvents, contexts, validParticles, sorted.length);
+            if (!gei) continue;
+            const srcIdx = gei.sourceSystem - sorted.length;
+            if (srcIdx < 0 || srcIdx >= perSystemAttrs.length) continue;
+            // trail 接收端：struct 里要有 particleId 才能接收 src.particleId
+            if (!perSystemAttrs[pi].some(a => a.name === "particleId")) {
+                perSystemAttrs[pi].push({ name: "particleId", type: "uint", usage: "set", stage: "initialize" });
+            }
+            // source emitter：要 set+打包 particleId（CPU init 写 id+u_TotalSpawnedCount = 稳定单调）
+            if (!perSystemAttrs[srcIdx].some(a => a.name === "particleId")) {
+                perSystemAttrs[srcIdx].push({ name: "particleId", type: "uint", usage: "set", stage: "initialize" });
+            }
+        }
+
         // 9. 编译有效的 Particle system（per-system 生成 shader）
         let particleIdx = 0;
         for (let pi = 0; pi < validParticles.length; pi++) {
@@ -1653,8 +1677,12 @@ export class VfxBuild {
                 };
             }
             case "variableRate":
+                // runtime 未实现独立的 VariableRate spawn task（只有 ConstantRate/SingleBurst/PeriodicBurst），
+                // 之前返回 type:"VariableRate" → runtime 无对应 task → 该系统一个粒子都不发射
+                // （UNI_Aura 底圈 disc A 用 variableRate 持续发射，因此整圈不显示，只剩 singleBurst 那条播一次）。
+                // variableRate 的 rate 在转换结果里是常量，与 ConstantRate 等价 → 映射到 ConstantRate 让其持续发射。
                 return {
-                    type: "VariableRate",
+                    type: "ConstantRate",
                     rate: p.rate ?? 10,
                 };
             case "spawnOverDistance":

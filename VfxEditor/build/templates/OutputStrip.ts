@@ -187,17 +187,15 @@ void main()
     // Strip position ratio: 0 = tail (oldest, FIFO head), 1 = head (newest)
     float stripRatio = float(tid) / max(float(particleCount - 1u), 1.0);
 
-${isGPUEvent ? `    // Head lifecycle sync: normalizedAge based on HEAD's age for alphaOverLife blocks
-    float headLifetimeVal = p.headDeathTime - p.stripGeneration;
-    float headAgeVal = u_TotalTime - p.stripGeneration;
-    p.normalizedAge = clamp(headAgeVal / max(headLifetimeVal, 0.001), 0.0, 1.0);` : `    // SimpleTrail: use particle's own normalizedAge (already set by Update)`}
+    // 用粒子自身 normalizedAge(per-particle)— 对齐 Unity strip：每个 trail 粒子按自己 age 取 size/alpha/color，
+    // 自然出现"两端细、尾部渐隐"。之前 GPU event 路径覆盖成 head-based(整条用头部年龄)→ 全条同尺寸、不逐粒子收尾，
+    // 只能靠硬编码 stripRatio taper 凑，结果偏粗、跟 Unity 细弧不符。(p.normalizedAge 已由 Update 按 age/lifetime 设好)
 
 ${worldToLocal}${blockLines}    float halfWidth = max(${size}, 0.001) * ${scale}.x * 0.5;
 
-${isGPUEvent ? `    // HeadTrail taper: 头宽尾窄，但尾部保留下限宽度(0.4)不收成尖点。
-    // 原来 stripRatio*stripRatio 把尾宽收到 0 → 又细又尖的薄刃(与 Unity 饱满羽毛状不符)。
-    // 改为线性 mix(0.4,1.0,stripRatio): 尾部仍 40% 宽，柔淡出交给 alpha *= stripRatio。
-    halfWidth *= mix(0.4, 1.0, stripRatio);` : `    // SimpleTrail: size controlled entirely by blocks (size over life curve)`}
+    // strip 宽度完全由 per-particle size(size-over-life 曲线 × TrailsWideSize)控制，对齐 Unity。
+    // 不再用硬编码 stripRatio taper —— 那是 head-based 时代的补偿(整条同 size 才需要硬 taper)。
+    // 现在每粒子 size 随自身 age 变(曲线两端小)→ 自然收尾，得到 Unity 那种细弧。
 
     // Face Camera Position orient (matches Unity VFX strip orient)
     vec3 localCameraPos = transformPosition(u_InvEmitterWorldMatrix, u_OrientCameraPos);
@@ -227,10 +225,14 @@ ${worldToLocalNeighbor}        vec3 bwd = _simPos - nP.position;
 
     // ── Chord cut (generation/wrap 隔离) ──
     // ring buffer 窗口中段若混进跨代/环回/陈旧槽位的粒子，会和邻居形成一条异常长的连线(chord)。
-    // 判据：某侧相邻段长 > 5× 另一侧(局部突变) → 判定本粒子是 chord 端点，collapse 成单点(top==bot)。
-    // chord 两端粒子都会命中 → 它们之间的 quad 4 顶点退化为 0 面积自动隐形，消除 TrailsWide 那条长亮直线。
-    // 均匀 ribbon(VFX11 TrailsThin 等段长接近)两侧比值≈1，永不触发 → 不影响已验证特效。
-    if (_fwdLen > 1e-6 && _bwdLen > 1e-6 && (_fwdLen > 5.0 * _bwdLen || _bwdLen > 5.0 * _fwdLen)) {
+    // 判据：相邻段长 > 5× 另一侧(局部突变) 且 长边为绝对意义上的"长连线"(> _chordAbsMin) → chord 端点，collapse。
+    //   加绝对长度门槛是因为：orbit 公转 ribbon 的前缘(刚 spawn 的头段≈0)会让"短段"侧触发 5× 比值，
+    //   但那是正常细节、长边并不长 → 用 _chordAbsMin 排除，只切真正跨越缓冲的长 chord(TrailsWide 长亮直线)。
+    // 均匀 ribbon(VFX11 等段长接近)两侧比值≈1，永不触发。
+    float _chordAbsMin = 0.8;
+    float _chordLong = max(_fwdLen, _bwdLen);
+    bool _chordCut = (_fwdLen > 1e-6 && _bwdLen > 1e-6 && _chordLong > _chordAbsMin && (_fwdLen > 5.0 * _bwdLen || _bwdLen > 5.0 * _fwdLen));
+    if (_chordCut) {
         Render.data[stripVertBase + 0u] = vec4(p.position, 1.0);
         Render.data[stripVertBase + 1u] = vec4(0.0);
         Render.data[stripVertBase + 2u] = vec4(0.0);
@@ -263,9 +265,9 @@ ${worldToLocalNeighbor}        vec3 bwd = _simPos - nP.position;
     float v_top = 0.0${uvBiasScrollY ? ` + u_TotalTime * ${uvBiasScrollY.speed.toFixed(4)} + mix(${uvBiasScrollY.randomMin.toFixed(4)}, ${uvBiasScrollY.randomMax.toFixed(4)}, float(WangHash(stripIndex + 0xBADD00Du)) / 4294967295.0)` : ``};
     float v_bot = 1.0${uvBiasScrollY ? ` + u_TotalTime * ${uvBiasScrollY.speed.toFixed(4)} + mix(${uvBiasScrollY.randomMin.toFixed(4)}, ${uvBiasScrollY.randomMax.toFixed(4)}, float(WangHash(stripIndex + 0xBADD00Du)) / 4294967295.0)` : ``};
 
-${isGPUEvent ? `    // HeadTrail: alpha synced with head lifecycle + strip position taper
-    float finalAlpha = ${alpha} * stripRatio;` : `    // SimpleTrail: alpha controlled entirely by blocks (alpha over life)
-    float finalAlpha = ${alpha};`}
+    // alpha 由 per-particle alpha-over-life 曲线控制(对齐 Unity strip)。
+    // 之前 GPU event 路径额外 *= stripRatio 按位置二次衰减 —— 在 per-particle 下会与曲线尾部淡出叠成双重淡出。
+    float finalAlpha = ${alpha};
 
     // Write two vertices (top & bottom of strip)
     Render.data[stripVertBase + 0u] = vec4(p.position + right, 1.0);

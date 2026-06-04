@@ -281,6 +281,13 @@ export function generateGPUInitialize(
         blockCode = blockCode.replace(/uint _psId = id \+ uint\(u_TotalSpawnedCount\);/g,
             "uint _psId = particleIndex;  // GPU strip: 用 ring buffer slot 索引保证 _psId 全圆周唯一");
     }
+    // strip 跨代复用修复：source emitter 若带 particleId(= id+u_TotalSpawnedCount, init 设定一次的稳定全局单调 head-ID),
+    // 用 src.particleId % stripCapacity 分配 strip —— 同 head 的 trail 共享 → 同 strip；不同 head → 不同 strip；
+    // 同槽复用要 256 head(远超 trail 寿命)后才碰撞 → 永不跨代。否则回退旧的 sourceParticleIndex(可复用,会跨代)。
+    const sourceHasParticleId = (sourcePackEntries || []).some(e => e.name === "particleId");
+    const stripHeadIdExpr = sourceHasParticleId
+        ? "readSourceParticle(sourceParticleIndex).particleId"
+        : "sourceParticleIndex";
     // needSource: init 块 setAttribute(source=Source) 或者 op 链有 getAttribute(location=Source)
     // 跟 CPU init 同语义；之前只看 block.source 漏 op 链让 _op = src.position 这种引用 src 但
     // 没声明 Particle src → 编译错 "src undeclared identifier"（TriggerEventCollide system 2 根因）
@@ -325,10 +332,10 @@ export function generateGPUInitialize(
         implicitLines.push("    // headDeathTime = headBirthTime + headLifetime = (u_TotalTime - src.age) + src.lifetime");
         implicitLines.push("    particle.headDeathTime = u_TotalTime - readSourceParticle(sourceParticleIndex).age + readSourceParticle(sourceParticleIndex).lifetime;");
     }
-    // stripIndex: 直接用 sourceParticleIndex 保证同时存活的 head 有唯一 strip
-    // (generation-based 分配会导致 hash 碰撞，让不同 head 的 trail 混入同一 strip)
+    // stripIndex: 用稳定单调 head-ID(src.particleId, 见上方 stripHeadIdExpr)分配，保证同一 head 的 trail
+    // 进同一 strip、不同 head 进不同 strip、复用槽位不跨代。必须与 allocCode 的 stripIdx 用同一表达式保持一致。
     if (hasAttr("stripIndex")) {
-        implicitLines.push("    particle.stripIndex = sourceParticleIndex % uint(u_StripCapacity);");
+        implicitLines.push(`    particle.stripIndex = (${stripHeadIdExpr}) % uint(u_StripCapacity);`);
     }
     // particleIndexInStrip: ring buffer 内 absolute slot, trail 渲染按它排序构造 ribbon.
     // 不写时 GPU init 留 0 → 同 strip 内所有粒子 stripRatio 都 0 → ribbon 顺序乱（三角块/锯齿）.
@@ -346,8 +353,8 @@ export function generateGPUInitialize(
     // Index source particle via EventIndexBuffer
     uint sourceParticleIndex = GPUEvent.indices[id];
 
-    // Ring Buffer allocation
-    uint stripIdx = sourceParticleIndex % uint(u_StripCapacity);
+    // Ring Buffer allocation —— stripIdx 用稳定单调 head-ID(避免 emitter 槽位复用导致 strip 跨代混用)
+    uint stripIdx = (${stripHeadIdExpr}) % uint(u_StripCapacity);
     uint ppsc = uint(u_ParticlePerStrip);
 
     // Atomically increment nextIndex to claim a slot
