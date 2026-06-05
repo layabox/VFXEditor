@@ -4,14 +4,25 @@ import type { VfxStage } from "./VfxStage";
 import { VfxLine } from "./VfxLine";
 import { VfxI18n } from "../i18n";
 
-/** 根据类型返回颜色 */
+/** 根据类型返回颜色（slot 端口 + Blackboard 属性圆点/类型标签 共用）。
+ *  覆盖 slot 类型与 property 类型("number" 是 Float 的 property 别名)。 */
 export function getSlotColor(type: string): string {
     switch (type) {
         case "flow": return "#FFFFFF";
-        case "float": return "#9EFB44";
-        case "vec3": return "#fdc086";
+        case "float": case "number": return "#9EFB44";
+        case "int": case "uint": return "#1DE0AC";
+        case "bool": return "#5FD3BC";
+        case "vec2": return "#7AD1FF";
+        case "vec3": case "position": case "direction": case "vector": return "#fdc086";
+        case "vec4": return "#FFD45E";
         case "color": return "#E077A4";
-        case "int": return "#1DE0AC";
+        case "Gradient": return "#C792EA";
+        case "Curve": return "#B5784A";
+        case "Texture2D": case "Texture3D": case "TextureCube": case "Texture2DArray": return "#F0883E";
+        case "Mesh": return "#60A5FA";
+        case "AABox": return "#4FC3D9";
+        case "GraphicsBuffer": return "#8B5CF6";
+        case "transform": case "camera": return "#9AA0A6";
         default: return "#cccccc";
     }
 }

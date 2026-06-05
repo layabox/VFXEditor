@@ -36,6 +36,12 @@ export class VfxContext extends gui.Widget {
     private _blocks: VfxBlock[] = [];
     private _flowInSlots: VfxSlot[] = [];
     private _flowOutSlots: VfxSlot[] = [];
+    /** ShaderGraph 输出节点的 shader-property 输入端口（slotId = "shaderprop_<uniform名>"）。
+     *  从 props.shaderPropertyExpressions / shaderPropertyBindings 的 key 推导，
+     *  让"operator → shader 属性"绑定在画布上显示成可见连线（连线源由 props.shaderBindingLinks 提供）。 */
+    private _shaderPropSlots: VfxSlot[] = [];
+    /** shader-property 端口的容器（重建时整体移除） */
+    private _shaderPropRow: gui.Widget | null = null;
     private _flowOutRow: gui.Widget | null = null;
     /** createPropRow 生成的属性行 Widget（用于清理） */
     private _propRowWidgets: gui.Widget[] = [];
@@ -79,6 +85,7 @@ export class VfxContext extends gui.Widget {
         this._blocks.length = 0;
         this._flowInSlots.length = 0;
         this._flowOutSlots.length = 0;
+        this._shaderPropSlots.length = 0;
         this._flowOutRow = null;
 
         const W = VfxContext.CTX_WIDTH;
@@ -189,6 +196,14 @@ export class VfxContext extends gui.Widget {
         this._flowOutSlots.length = 0;
         this._flowOutRow = null;
 
+        // 清旧 shader-property 端口
+        if (this._shaderPropRow && this._shaderPropRow.parent) {
+            this._shaderPropRow.parent.removeChild(this._shaderPropRow);
+        }
+        for (const s of this._shaderPropSlots) s.dispose();
+        this._shaderPropSlots.length = 0;
+        this._shaderPropRow = null;
+
         // 清旧属性行
         for (const w of this._propRowWidgets) {
             if (w.parent) w.parent.removeChild(w);
@@ -245,6 +260,9 @@ export class VfxContext extends gui.Widget {
             yOffset += block.height + VfxBlock.BLOCK_MARGIN;
         }
 
+        // ── ShaderGraph 输出节点：shader-property 输入端口（让绑定显示成连线） ──
+        yOffset = this._addShaderPropPorts(yOffset);
+
         // 无 Block 时保留最小空白区域（右键可添加 Block）
         const minBottom = this._bgY + VfxContext.HEADER_HEIGHT + 30;
         const bgBottomY = Math.max(yOffset, minBottom);
@@ -272,6 +290,75 @@ export class VfxContext extends gui.Widget {
 
     private _getBlocksStartY(): number {
         return this._bgY + VfxContext.HEADER_HEIGHT;
+    }
+
+    /**
+     * 给 ShaderGraph 输出节点加一列 shader-property 输入端口（在节点左边框上，竖向堆叠）。
+     * 端口集合来自 props.shaderPropertyExpressions(key=uniform名) + shaderPropertyBindings(key=exposedName)。
+     * slotId 约定 "shaderprop_<key>"；连线由 refreshAllLines 根据 props.shaderBindingLinks 画出。
+     * v1 端口设为不可交互(touchable=false)，仅展示派生连线，不支持拖拽增删。
+     * @returns 追加端口后的 yOffset
+     */
+    private _addShaderPropPorts(yOffset: number): number {
+        const props = this.contextData.props || {};
+        const expr: Record<string, any> = (props as any).shaderPropertyExpressions || {};
+        const binds: Record<string, any> = (props as any).shaderPropertyBindings || {};
+        const blinks: Record<string, any> = (props as any).shaderBindingLinks || {};
+        const keys: string[] = [];
+        const typeOf: Record<string, string> = {};
+        for (const k of Object.keys(expr)) {
+            if (keys.indexOf(k) < 0) { keys.push(k); typeOf[k] = (expr[k] && expr[k].outputType) || "float"; }
+        }
+        for (const k of Object.keys(binds)) {
+            if (keys.indexOf(k) < 0) { keys.push(k); typeOf[k] = "Texture2D"; }
+        }
+        // shaderBindingLinks 可能含非 shader 字段的绑定(如 Initialize 的 Bounds)→ 也生成端口
+        for (const k of Object.keys(blinks)) {
+            if (keys.indexOf(k) < 0) { keys.push(k); typeOf[k] = typeOf[k] || "float"; }
+        }
+        if (keys.length === 0) return yOffset;
+
+        const W = VfxContext.CTX_WIDTH;
+        const rowH = 20;
+        const headerH = 16;
+        const row = new gui.Widget();
+        row.setPos(0, yOffset);
+
+        // 小标题，区分于上方 Block 参数
+        const title = new gui.TextField();
+        title.text = "Bindings";
+        title.style.fontSize = 10;
+        title.color = 0x888888;
+        title.setSize(W - 20, headerH);
+        title.setPos(10, 2);
+        row.addChild(title);
+
+        let y = headerH;
+        for (const k of keys) {
+            const def: IVfxSlotDef = { id: "shaderprop_" + k, name: k, type: typeOf[k] };
+            const slot = new VfxSlot(def, true, this.contextData.id, this._stage, def.id);
+            const slotUI = slot.createUI(24, false, true);   // hideLabel：用下面手工 label
+            // 图标中心对齐节点左边框 (x=0)，行内竖向居中
+            slotUI.setPos(-11, y + rowH / 2 - 12);
+            slotUI.touchable = false;   // v1 只展示，不允许拖拽连接（避免产生跟 shaderBindingLinks 不一致的连接）
+            row.addChild(slotUI);
+
+            const label = new gui.TextField();
+            label.text = k;
+            label.style.fontSize = 10;
+            label.color = 0xAAAAAA;
+            label.setSize(W - 20, 14);
+            label.setPos(10, y + (rowH - 14) / 2);
+            row.addChild(label);
+
+            this._shaderPropSlots.push(slot);
+            y += rowH;
+        }
+
+        row.setSize(W, y);
+        this.addChild(row);
+        this._shaderPropRow = row;
+        return yOffset + y;
     }
 
     private _recalcSize(bgBottomY: number, totalH: number): void {
@@ -462,6 +549,12 @@ export class VfxContext extends gui.Widget {
         const flowIn = this._flowInSlots.find(s => s.slotId === slotId);
         if (flowIn) return flowIn;
 
+        // shader-property 输入端口（"shaderprop_<uniform名>"）
+        if (slotId.indexOf("shaderprop_") === 0) {
+            const sp = this._shaderPropSlots.find(s => s.slotId === slotId);
+            if (sp) return sp;
+        }
+
         // Block 输入端口: "block_<blockId>_<inputId>"
         const parsed = parseBlockSlotId(slotId);
         if (parsed) {
@@ -632,6 +725,7 @@ export class VfxContext extends gui.Widget {
         for (const b of this._blocks) b.dispose();
         for (const s of this._flowInSlots) s.dispose();
         for (const s of this._flowOutSlots) s.dispose();
+        for (const s of this._shaderPropSlots) s.dispose();
         if (this.parent) this.parent.removeChild(this);
         this.contextData = null;
         this._stage = null;

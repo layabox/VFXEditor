@@ -356,6 +356,27 @@ export class VfxStage extends gui.Widget {
         return this._operatorMap.get(operatorId) || null;
     }
 
+    // ---- 属性 hover 高亮（左侧 Blackboard 悬停属性 → 画布对应 getProperty 节点高亮）----
+
+    private _propHighlighted: VfxNode[] = [];
+
+    /** 高亮所有引用指定 property 的 getProperty 节点 */
+    highlightPropertyNodes(propName: string): void {
+        this.clearPropertyHighlight();
+        if (!this._data || !propName) return;
+        for (const op of this._data.operators) {
+            if (op.typeId !== "getProperty" || op.props?.property !== propName) continue;
+            const ui = this._operatorMap.get(op.id);
+            if (ui) { ui.setHovered(true); this._propHighlighted.push(ui); }
+        }
+    }
+
+    /** 清除属性 hover 高亮 */
+    clearPropertyHighlight(): void {
+        for (const ui of this._propHighlighted) ui.setHovered(false);
+        this._propHighlighted.length = 0;
+    }
+
     // ---- 创建节点 ----
 
     createEvent(typeId: string, x: number, y: number): void {
@@ -578,6 +599,41 @@ export class VfxStage extends gui.Widget {
                     line.inNodeId = conn.nodeId;
                     line.inSlotId = conn.slotId;
                     line.lineColor = getSlotColor(outSlot.slotDef.type);
+
+                    const startPt = outSlot.getIconContLocalCenter(this._cont);
+                    const endPt = inSlot.getIconContLocalCenter(this._cont);
+                    line.setLocalEndpoints(startPt.x, startPt.y, endPt.x, endPt.y);
+                }
+            }
+        }
+
+        // 2.5) Shader-property 绑定连线（终端 operator → ShaderGraph 输出节点的命名端口）
+        //      数据来自 ctx.props.shaderBindingLinks: { uniform名/exposedName: 终端 operator 的 laya id }
+        //      派生只读连线：让"画布上没连线但运行时有效"的 shader 绑定可见（UNI 转换资产特性）
+        for (const ctxData of this._data.contexts) {
+            const links: Record<string, number | number[]> = (ctxData.props as any)?.shaderBindingLinks;
+            if (!links || typeof links !== "object") continue;
+            const ctxUI = this._contextMap.get(ctxData.id);
+            if (!ctxUI) continue;
+
+            for (const uniformKey of Object.keys(links)) {
+                const inSlot = ctxUI.getInputSlot("shaderprop_" + uniformKey);
+                if (!inSlot) continue;
+                // value 可为单个 op id 或多个（combine 多分量 → 一个端口多条线）
+                const raw = links[uniformKey];
+                const opIds = Array.isArray(raw) ? raw : [raw];
+                for (const opId of opIds) {
+                    const opUI = this._operatorMap.get(opId);
+                    if (!opUI) continue;                    // 终端 op 不在画布（unsupported type）→ 跳过
+                    const outSlot = opUI.outputSlots[0];     // 终端 operator 主输出
+                    if (!outSlot) continue;
+
+                    const line = new VfxLine(this);
+                    line.outNodeId = opId;
+                    line.outSlotId = outSlot.slotId;
+                    line.inNodeId = ctxData.id;
+                    line.inSlotId = "shaderprop_" + uniformKey;
+                    line.lineColor = getSlotColor(inSlot.slotDef.type);
 
                     const startPt = outSlot.getIconContLocalCenter(this._cont);
                     const endPt = inSlot.getIconContLocalCenter(this._cont);

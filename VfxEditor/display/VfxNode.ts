@@ -232,8 +232,18 @@ export class VfxNode extends gui.Widget {
         this._titleLabel = tmpl.getChild("title", gui.TextField);
         this._selectShape = tmpl.getChild("select", gui.Shape);
         this._selectShape.setSize(W + 4, H + 4);
+        // hover 高亮：对齐 Unity 的醒目选中效果（细线框不明显）。
+        // overSelect 在节点不透明背景之下，放大一圈 → 节点边缘外露出一圈琥珀色光晕 + 加粗亮边框，
+        // 整体形成醒目高亮环，且不染色节点内容、无 z-order 风险。
         this._overSelectShape = tmpl.getChild("overSelect", gui.Shape);
-        this._overSelectShape.setSize(W + 4, H + 4);
+        this._overSelectShape.setSize(W + 8, H + 8);
+        this._overSelectShape.setPos(-4, -4);
+        const gOver = this._overSelectShape.getGraphics(gui.SRect);
+        gOver.lineWidth = 3;
+        gOver.lineColor.parse("#FFB300");
+        gOver.fillColor.parse("#FFB300");
+        gOver.fillColor.a = 0.22;
+        this._overSelectShape.visible = false;
 
         // 将模板子组件移动到当前节点
         while (tmpl.numChildren > 0) {
@@ -965,6 +975,11 @@ export class VfxNode extends gui.Widget {
 
     private _setSelectStyle(selected: boolean): void {
         if (this._selectShape) this._selectShape.visible = selected;
+    }
+
+    /** hover 高亮（鼠标悬停左侧属性时，对应 getProperty 节点高亮，对齐 Unity）*/
+    setHovered(hovered: boolean): void {
+        if (this._overSelectShape) this._overSelectShape.visible = hovered;
     }
 
     // ---- 插槽访问 ----

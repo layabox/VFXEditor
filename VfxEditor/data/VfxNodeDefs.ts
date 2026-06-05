@@ -80,12 +80,15 @@ export function getBlocksForContext(contextTypeId: string): IVfxBlockTypeDef[] {
 /** Property 设置面板的 typeRegistry ID */
 export function getPropSettingsRegistryId(vfxType: string): string { return "vfx_propset_" + vfxType; }
 
+/** AABox 值的嵌套对象类型 ID（center/size 两组 vec3，catalogBarStyle:hidden 内联渲染） */
+export const VFX_AABOX_VALUE_TYPE_ID = "vfx_aabox_value";
+
 /** 根据 VFX 属性类型生成 Property 设置面板的属性描述符 */
 function buildPropSettingsDescriptors(vfxType: string): IEditor.FPropertyDescriptor[] {
     const props: IEditor.FPropertyDescriptor[] = [
         { name: "exposed", caption: "Exposed", type: "boolean", default: true },
         { name: "group", caption: "Group", type: "string", default: "" },
-        { name: "displayName", caption: "Display Name", type: "string", default: "" },
+        // displayName 已从属性详情移除（对齐 Unity，Unity 用属性名本身；组件 Properties 面板缺它时回退属性名）
     ];
 
     switch (vfxType) {
@@ -119,6 +122,17 @@ function buildPropSettingsDescriptors(vfxType: string): IEditor.FPropertyDescrip
             // LayaIDE 无内置 Curve inspector；先不提供 default 编辑器，让 exposed + tooltip 兜底
             // 避免点击 Curve property 时 vfx_propset_Curve type 缺失报 not iterable
             break;
+        case "Texture2D":
+        case "Mesh":
+            // IDE Asset.ts 已注册 Texture2D/Mesh 为 isAsset 类型，AssetField 自动渲染资源选择框。
+            // 值在内存里是 { _$uuid }（IDE 格式），存盘时由 VfxPropValueBridge 转回 ["res://uuid"]
+            props.push({ name: "default", caption: "Value", type: vfxType } as any);
+            break;
+        case "AABox":
+            // 轴对齐包围盒（对齐 Unity "Axis Aligned Box"）：default = { center:{x,y,z}, size:{x,y,z} }。
+            // 用嵌套类型 vfx_aabox_value（catalogBarStyle:hidden）让 Center/Size 两组 vec3 内联平铺。
+            props.push({ name: "default", caption: "Value", type: VFX_AABOX_VALUE_TYPE_ID, nullable: false } as any);
+            break;
     }
 
     props.push({ name: "tooltip", caption: "Tooltip", type: "string", default: "" });
@@ -135,7 +149,7 @@ function buildPropSettingsDescriptors(vfxType: string): IEditor.FPropertyDescrip
 }
 
 /** Property 设置面板支持的 VFX 属性类型 */
-const VFX_PROPSET_TYPES = ["number", "float", "int", "bool", "vec2", "vec3", "vec4", "color", "Gradient", "Curve", "Texture2D", "Mesh"];
+const VFX_PROPSET_TYPES = ["number", "float", "int", "bool", "vec2", "vec3", "vec4", "color", "Gradient", "Curve", "Texture2D", "Mesh", "AABox"];
 
 // ─── typeRegistry 批量注册 ─────────────────────────
 
@@ -201,6 +215,18 @@ export function registerAllVfxTypes(captionTrans?: Record<string, string>, tipsT
 
     // 图级属性
     types.push({ name: VFX_GRAPH_TYPE_ID, caption: "VFX Graph", properties: VFX_GRAPH_PROPERTIES, ...trans("__graph__") });
+
+    // AABox 值的嵌套对象类型（Center/Size 两组 vec3）。catalogBarStyle:hidden → 子属性内联平铺，
+    // 不出额外折叠头，效果对齐 Unity "Axis Aligned Box" 的 Center / Size 布局。
+    types.push({
+        name: VFX_AABOX_VALUE_TYPE_ID,
+        caption: "Axis Aligned Box",
+        catalogBarStyle: "hidden",
+        properties: [
+            { name: "center", caption: "Center", type: "vec3", default: { x: 0, y: 0, z: 0 } },
+            { name: "size", caption: "Size", type: "vec3", default: { x: 0, y: 0, z: 0 } },
+        ],
+    } as any);
 
     // Event
     for (const def of VFX_EVENT_DEFS) {

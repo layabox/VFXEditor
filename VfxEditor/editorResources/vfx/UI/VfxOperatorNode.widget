@@ -28,9 +28,9 @@
         "lineWidth": 2,
         "lineColor": {
           "_$type": "Color",
-          "r": 0.5,
-          "g": 0.67,
-          "b": 1.0
+          "r": 1.0,
+          "g": 0.6,
+          "b": 0.1
         },
         "fillColor": {
           "_$type": "Color",

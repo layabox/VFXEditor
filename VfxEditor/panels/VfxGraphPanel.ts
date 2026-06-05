@@ -6,6 +6,9 @@ import type { IVfxHost } from "./IVfxHost";
 const LEFT_W = 250;
 const RIGHT_W = 380;
 const TITLE_H = 24;
+const SPLITTER_W = 4;     // 左栏与画布之间的可拖拽分隔条宽度
+const MIN_LEFT_W = 200;   // 左栏最小宽度
+const MIN_MID_W = 200;    // 画布最小宽度（避免左栏拖太宽把画布挤没）
 
 /**
  * VFX Graph 合并面板
@@ -29,6 +32,10 @@ export class VfxGraphPanel extends IEditor.EditorPanel implements IVfxHost {
     private _leftCol: gui.Widget;
     private _midCol: gui.Widget;
     private _rightCol: gui.Widget;
+    private _splitter: gui.Shape;
+    private _leftW = LEFT_W;          // 左栏当前宽度（可拖拽调整）
+    private _dragStartX = 0;
+    private _dragStartW = 0;
 
     get scene(): VfxScenePanel { return this._scene; }
     get propertyPanel(): VfxPropertyPanel { return this._propPanel; }
@@ -78,13 +85,21 @@ export class VfxGraphPanel extends IEditor.EditorPanel implements IVfxHost {
         this._midCol = new gui.Widget();
         this._body.addChild(this._midCol);
 
+        // 左栏 / 画布之间的可拖拽分隔条（最后添加，保证在最上层可点）
+        this._splitter = new gui.Shape();
+        this._splitter.getGraphics(gui.SRect).fillColor.parse("#333333");
+        this._splitter.touchable = true;
+        try { (this._splitter as any).cursor = "ew-resize"; } catch { }
+        this._body.addChild(this._splitter);
+        this._splitter.on("pointer_down", this._onSplitterDown, this);
+
         // panel 尺寸变化时手动重排，避免 fairyGUI relation 多栏重叠的问题
         panel.on("size_changed", this._layout, this);
         this._layout();
 
         // 实例化三个子组件
         this._propPanel = new VfxPropertyPanel();
-        await this._propPanel.create(this._leftCol);
+        await this._propPanel.create(this._leftCol, this);
 
         this._scene = new VfxScenePanel();
         await this._scene.create(this._midCol, this);
@@ -109,15 +124,48 @@ export class VfxGraphPanel extends IEditor.EditorPanel implements IVfxHost {
         this._titleLabel.setSize(Math.max(0, W - 16 - btnW - 8), TITLE_H - 4);
         this._body.setSize(W, bodyH);
 
-        this._leftCol.setPos(0, 0);
-        this._leftCol.setSize(LEFT_W, bodyH);
+        // 把左栏宽度 clamp 到当前可用范围（窗口变窄时自动收缩）
+        const maxLeft = Math.max(MIN_LEFT_W, W - RIGHT_W - MIN_MID_W);
+        this._leftW = Math.max(MIN_LEFT_W, Math.min(this._leftW, maxLeft));
+        const leftW = this._leftW;
 
-        this._rightCol.setPos(Math.max(LEFT_W, W - RIGHT_W), 0);
+        this._leftCol.setPos(0, 0);
+        this._leftCol.setSize(leftW, bodyH);
+
+        this._rightCol.setPos(Math.max(leftW, W - RIGHT_W), 0);
         this._rightCol.setSize(RIGHT_W, bodyH);
 
-        const midW = Math.max(0, W - LEFT_W - RIGHT_W);
-        this._midCol.setPos(LEFT_W, 0);
+        const midW = Math.max(0, W - leftW - RIGHT_W);
+        this._midCol.setPos(leftW, 0);
         this._midCol.setSize(midW, bodyH);
+
+        // 分隔条骑在左栏右边界上
+        this._splitter.setPos(leftW - SPLITTER_W / 2, 0);
+        this._splitter.setSize(SPLITTER_W, bodyH);
+    }
+
+    /** 分隔条拖拽：调整左栏宽度 */
+    private _onSplitterDown(e: gui.Event): void {
+        if (e.input.button !== 0) return;
+        e.stopPropagation();
+        this._dragStartX = e.input.x;
+        this._dragStartW = this._leftW;
+        e.capturePointer();
+        this._splitter.on("pointer_move", this._onSplitterMove, this);
+        this._splitter.on("pointer_up", this._onSplitterUp, this);
+    }
+
+    private _onSplitterMove(e: gui.Event): void {
+        const W = this._panel.width;
+        const maxLeft = Math.max(MIN_LEFT_W, W - RIGHT_W - MIN_MID_W);
+        const dx = e.input.x - this._dragStartX;
+        this._leftW = Math.max(MIN_LEFT_W, Math.min(maxLeft, this._dragStartW + dx));
+        this._layout();
+    }
+
+    private _onSplitterUp(_e: gui.Event): void {
+        this._splitter.off("pointer_move", this._onSplitterMove, this);
+        this._splitter.off("pointer_up", this._onSplitterUp, this);
     }
 
     /** 通过 Editor.panelManager.postMessage("VfxGraphPanel", "openFile", assetId) 触发 */

@@ -85,7 +85,7 @@
     },
     {
       "_$id": "vfx_proppanel_list",
-      "_$type": "Widget",
+      "_$type": "Panel",
       "name": "list",
       "y": 30,
       "width": 250,

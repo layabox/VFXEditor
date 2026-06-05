@@ -2,6 +2,7 @@ import fs from "fs";
 import { VfxStage } from "../display/VfxStage";
 import type { IVfxGraphData } from "../data/VfxTypes";
 import { VFX_GRAPH_PROPERTIES } from "../data/VfxNodeDefs";
+import { propDefaultToIDE, propDefaultToRuntime, promoteAABoxType, demoteAABoxType } from "../data/VfxPropValueBridge";
 import type { IVfxHost } from "./IVfxHost";
 
 /**
@@ -140,6 +141,17 @@ export class VfxScenePanel {
         if (!data.operators) data.operators = [];
         this._ensureGraphProps(data);
 
+        // 属性 default 值：运行时格式 → IDE 编辑器格式（Gradient/资源类型），
+        // 让内置 Gradient/Asset 编辑器能直接显示真实值。存盘时由 save() 转回运行时格式。
+        if (Array.isArray(data.properties)) {
+            for (const p of data.properties as any[]) {
+                if (!p) continue;
+                // 先把 AABox 形状的属性 type 提升为 "AABox"（转换器降级成了 float）
+                promoteAABoxType(p);
+                if (p.type != null) p.default = propDefaultToIDE(p.type, p.default);
+            }
+        }
+
         // 重置脏状态
         this._versionTracker.isModified = false;
         this._versionTracker.savePoint++;
@@ -168,9 +180,22 @@ export class VfxScenePanel {
         console.log("[VfxScenePanel] saving to:", this._filePath,
             "contexts:", data.contexts.length, "operators:", data.operators.length);
 
+        // 属性 default 值：IDE 编辑器格式 → 运行时格式（Gradient/资源类型）。
+        // 深拷贝整个对象再转换，绝不改内存里被 watch 的 graphData（继续保持 IDE 格式可编辑）。
+        let saveData = data;
+        if (Array.isArray(data.properties)) {
+            saveData = JSON.parse(JSON.stringify(data));
+            for (const p of saveData.properties as any[]) {
+                if (!p || p.type == null) continue;
+                p.default = propDefaultToRuntime(p.type, p.default);
+                // AABox 降回 "float"，保持 .vfx 文件与 runtime 格式跟转换器产出一致
+                demoteAABoxType(p);
+            }
+        }
+
         this._history.paused = true;
         try {
-            await fs.promises.writeFile(this._filePath, JSON.stringify(data, null, 2), { encoding: "utf-8" });
+            await fs.promises.writeFile(this._filePath, JSON.stringify(saveData, null, 2), { encoding: "utf-8" });
         } catch (err: any) {
             console.error("write '" + this._filePath + "' failed: " + err);
         }
