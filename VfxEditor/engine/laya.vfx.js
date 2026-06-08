@@ -882,6 +882,46 @@
             VFXRenderer._customShaderMaterialCache.set(key, mat);
             return mat;
         }
+        // 基础 mesh 纹理材质：无 shadergraph(.bps)时,用内置 VFXUnlit + 绑定 MainTexture 到 u_AlbedoTexture。
+        // 对齐 Unity —— Output Mesh 自带 Main Texture,默认材质即可显示纹理,不依赖 Shader Graph。
+        // 按 (blendMode, 纹理 uuid, uvMode, flipbook) 缓存,避免共享材质被不同纹理互相覆盖。
+        static getMeshTexturedMaterial(blendMode = "Alpha", mainTextureUuid = "", uvMode = "Default", flipbookSize = null) {
+            // IDE Texture2D 字段存裸 assetId,转换器存 res://uuid —— 统一补前缀
+            if (mainTextureUuid && mainTextureUuid.indexOf("://") < 0)
+                mainTextureUuid = "res://" + mainTextureUuid;
+            const fbKey = flipbookSize ? `${flipbookSize.x}x${flipbookSize.y}` : "";
+            const key = `__meshtex__${blendMode}__${mainTextureUuid}__${uvMode}__${fbKey}`;
+            let mat = VFXRenderer._customShaderMaterialCache.get(key);
+            if (mat)
+                return mat;
+            const shader = Laya.Shader3D.find("VFXUnlit");
+            if (!shader) {
+                console.error("[VFX Renderer] built-in 'VFXUnlit' shader not registered");
+                return null;
+            }
+            mat = new Laya.Material();
+            mat.setShaderName("VFXUnlit");
+            const vfxDef = Laya.Shader3D.getDefineByName("VFX_INSTANCED");
+            if (vfxDef)
+                mat.addDefine(vfxDef);
+            const colorDef = Laya.Shader3D.getDefineByName("COLOR");
+            if (colorDef)
+                mat.addDefine(colorDef);
+            mat.setColor("u_Color", new Laya.Color(1, 1, 1, 1));
+            mat.setTexture("u_AlbedoTexture", VFXRenderer.getDefaultDotTexture());
+            mat.renderQueue = 3000;
+            mat.cull = Laya.RenderState.CULL_NONE;
+            applyBlendMode(mat, blendMode);
+            applyFlipbook(mat, uvMode, flipbookSize);
+            VFXRenderer._customShaderMaterialCache.set(key, mat);
+            if (mainTextureUuid) {
+                VFXRenderer._tryLoadTextureOnce(mainTextureUuid, tex => {
+                    if (mat)
+                        mat.setTexture("u_AlbedoTexture", tex);
+                });
+            }
+            return mat;
+        }
         static getStripMaterial(blendMode = "Alpha", mainTextureUuid = "", colorMapping = "Default", uvScale, uvBias, gradientStops, tilingMode = "Stretch", tilingSegments = 1) {
             var _a, _b, _c, _d, _e;
             const gradHash = (gradientStops && gradientStops.length > 0)
@@ -1159,11 +1199,25 @@
                         element.material = VFXRenderer.getBillboardMaterial(mode);
                     }
                     else if (!meshMaterial) {
-                        element.material = VFXRenderer.getCustomShaderMaterial("VFXUnlit", mode);
+                        if (!VFXRenderer._meshTexDiagOnce) {
+                            VFXRenderer._meshTexDiagOnce = true;
+                        }
+                        // 无 shadergraph(.bps)材质的 mesh 输出:用基础 VFXUnlit + 绑 MainTexture
+                        // 对齐 Unity —— Output Mesh 不用 Shader Graph 也能用默认材质显示纹理。
+                        const meshMainTex = geometry.mainTexture || "";
+                        if (meshMainTex) {
+                            element.material = VFXRenderer.getMeshTexturedMaterial(mode, meshMainTex, geometry.uvMode || "Default", geometry.flipbookSize);
+                        }
+                        else {
+                            element.material = VFXRenderer.getCustomShaderMaterial("VFXUnlit", mode);
+                        }
                     }
                     else {
                         if (meshMaterial) {
                             applyBlendMode(meshMaterial, mode);
+                        }
+                        if (!VFXRenderer._meshTexDiagOnce) {
+                            VFXRenderer._meshTexDiagOnce = true;
                         }
                         if (meshMaterial && outType === "outputBillboard") {
                             const mainTex = geometry.mainTexture;
@@ -1180,6 +1234,23 @@
                                 if (!existing) {
                                     meshMaterial.setTexture("u_AlbedoTexture", VFXRenderer.getDefaultDotTexture());
                                 }
+                            }
+                        }
+                        // mesh 输出(shadergraph 或基础):把 Output Mesh 的 MainTexture 字段直接绑到渲染材质。
+                        // 对齐 Unity —— Main Texture 字段驱动纹理,不依赖 shaderName/shadergraph 属性绑定(shaderName 常被 IDE 留空)。
+                        // 绑多个 sampler 名覆盖 .bps(MainTexture/_MainTexture)和基础材质(u_AlbedoTexture)。
+                        if (meshMaterial && outType !== "outputBillboard") {
+                            let meshFieldTex = geometry.mainTexture;
+                            if (meshFieldTex && meshFieldTex.indexOf("://") < 0)
+                                meshFieldTex = "res://" + meshFieldTex;
+                            if (meshFieldTex) {
+                                VFXRenderer._tryLoadTextureOnce(meshFieldTex, tex => {
+                                    if (tex) {
+                                        meshMaterial.setTexture("MainTexture", tex);
+                                        meshMaterial.setTexture("_MainTexture", tex);
+                                        meshMaterial.setTexture("u_AlbedoTexture", tex);
+                                    }
+                                });
                             }
                         }
                         const softFade = geometry.softParticleFade || 0;
@@ -2000,6 +2071,7 @@
             u_VfxInvViewProjection: Laya.Shader3D.propertyNameToID("u_VfxInvViewProjection"),
             u_OrientCameraPos: Laya.Shader3D.propertyNameToID("u_OrientCameraPos"),
             u_OrientCameraDir: Laya.Shader3D.propertyNameToID("u_OrientCameraDir"),
+            u_OrientCameraUp: Laya.Shader3D.propertyNameToID("u_OrientCameraUp"),
             u_ParticlePerStrip: Laya.Shader3D.propertyNameToID("u_ParticlePerStrip"),
             u_StripCapacity: Laya.Shader3D.propertyNameToID("u_StripCapacity"),
             u_NewLoop: Laya.Shader3D.propertyNameToID("u_NewLoop"),
@@ -2295,17 +2367,19 @@
                 }
             }
         }
-        setOrientCamera(cmd, cameraWorldPos, cameraForward) {
+        setOrientCamera(cmd, cameraWorldPos, cameraForward, cameraUp) {
             var _a;
             for (const sd of this.outputDatas) {
                 cmd.addSetShaderDataCommand(sd, ID.u_OrientCameraPos, Laya.ShaderDataType.Vector3, cameraWorldPos);
                 cmd.addSetShaderDataCommand(sd, ID.u_OrientCameraDir, Laya.ShaderDataType.Vector3, cameraForward);
+                if (cameraUp) cmd.addSetShaderDataCommand(sd, ID.u_OrientCameraUp, Laya.ShaderDataType.Vector3, cameraUp);
             }
             for (const extra of this.extraOutputs) {
                 const esd = (_a = extra.outputDatas) === null || _a === void 0 ? void 0 : _a[0];
                 if (esd) {
                     cmd.addSetShaderDataCommand(esd, ID.u_OrientCameraPos, Laya.ShaderDataType.Vector3, cameraWorldPos);
                     cmd.addSetShaderDataCommand(esd, ID.u_OrientCameraDir, Laya.ShaderDataType.Vector3, cameraForward);
+                    if (cameraUp) cmd.addSetShaderDataCommand(esd, ID.u_OrientCameraUp, Laya.ShaderDataType.Vector3, cameraUp);
                 }
             }
         }
@@ -4785,8 +4859,17 @@
                 }
                 case "SampleCurve": {
                     const curve = this._evalNode(n.inputs[0], nodes, cache, ctx);
-                    const t = Number(this._evalNode(n.inputs[1], nodes, cache, ctx)) || 0;
-                    result = this._sampleCurve(curve, t);
+                    const timeNode = nodes[n.inputs[1]];
+                    // age 驱动的 SampleCurve(time=ageMedian 全局常量)在全局表达式里无法 per-particle 采样。
+                    // 用曲线在 [0,1] 的【时间平均值】—— 数学上等于 Unity per-particle 随年龄采样后所有粒子的平均
+                    // (粒子年龄在常 spawn 下均匀分布 [0,1])→ 整体亮度与 Unity 对齐(per-particle 淡入柔边作为后续 A)。
+                    if (timeNode && timeNode.kind === "Constant" && timeNode.slotName === "ageMedian") {
+                        result = this._sampleCurveAverage(curve);
+                    }
+                    else {
+                        const t = Number(this._evalNode(n.inputs[1], nodes, cache, ctx)) || 0;
+                        result = this._sampleCurve(curve, t);
+                    }
                     break;
                 }
                 case "Add":
@@ -4931,6 +5014,19 @@
             const u = (clamp - f0.time) / denom;
             return f0.value + (f1.value - f0.value) * u;
         }
+        // age 曲线在 [0,1] 的时间平均值(32 点中点采样)——用于把"按粒子年龄采样"的全局表达式
+        // 近似成"所有粒子平均亮度",对齐 Unity 整体亮度。
+        static _sampleCurveAverage(c) {
+            if (!c || !c.frames || c.frames.length === 0)
+                return 0;
+            if (c.frames.length === 1)
+                return c.frames[0].value;
+            const N = 32;
+            let sum = 0;
+            for (let i = 0; i < N; i++)
+                sum += this._sampleCurve(c, (i + 0.5) / N);
+            return sum / N;
+        }
         static _binOp(kind, a, b) {
             const isVec = (v) => v && typeof v === "object" && ("r" in v || "x" in v);
             if (isVec(a) || isVec(b)) {
@@ -5003,6 +5099,7 @@
 
     const globalRand = new Laya.Rand((Math.random() * 0xFFFFFFFF) >>> 0);
     const _tempCamForward = new Laya.Vector3();
+    const _tempCamUp = new Laya.Vector3();
     class VisualEffect extends Laya.Script {
         get asset() {
             return this._asset;
@@ -5321,6 +5418,10 @@
                     const ids = [Laya.Shader3D.propertyNameToID(uniformName)];
                     if (uniformName.startsWith("_"))
                         ids.push(Laya.Shader3D.propertyNameToID(uniformName.substring(1)));
+                    // 同 _evaluateShaderExpressions：IDE 剥全部下划线,补无下划线变体兜底
+                    const noUnderscoreTex = uniformName.replace(/_/g, "");
+                    if (noUnderscoreTex !== uniformName && noUnderscoreTex !== uniformName.substring(1))
+                        ids.push(Laya.Shader3D.propertyNameToID(noUnderscoreTex));
                     for (const sd of allDatas) {
                         for (const aid of ids)
                             sd.setTexture(aid, entry.texture);
@@ -5697,12 +5798,46 @@
                 }
                 for (const uniformName in expressions) {
                     const graph = expressions[uniformName];
+                    // per-particle: Alpha_Multiplier 的 age 曲线传成 uAlphaCurveTimes/Vals,render shader 在
+                    // v_NormalizedAge(node64)处分段采样,还原 Unity 每粒子随年龄的 alpha 淡入(年轻 dim→年老 bright),
+                    // 而非全局常量(全局会让中心年轻粒子也亮、环变厚)。曲线重采样为 4 点 piecewise。
+                    if (uniformName === "Alpha_Multiplier") {
+                        let curveNode = null, mult = 1;
+                        for (const nid in graph.nodes) {
+                            const nd = graph.nodes[nid];
+                            if (nd.kind === "Constant" && nd.outputType === "Curve")
+                                curveNode = nd;
+                            else if (nd.kind === "VFXParameter") {
+                                const pv = propertyValues && propertyValues.get ? propertyValues.get(nd.exposedName) : undefined;
+                                mult = (typeof pv === "number") ? pv : (typeof nd.defaultValue === "number" ? nd.defaultValue : 1);
+                            }
+                        }
+                        if (curveNode && curveNode.value) {
+                            const c = curveNode.value;
+                            const s = (t) => mult * (ShaderExpressionEvaluator._sampleCurve(c, t) || 0);
+                            const _base = uniformName.replace(/[^A-Za-z0-9]/g, "");
+                            const tId = Laya.Shader3D.propertyNameToID("u" + _base + "CurveTimes");
+                            const vId = Laya.Shader3D.propertyNameToID("u" + _base + "CurveVals");
+                            const tv = new Laya.Vector4(0, 1 / 3, 2 / 3, 1);
+                            const vv = new Laya.Vector4(s(0), s(1 / 3), s(2 / 3), s(1));
+                            for (const sd of allDatas) {
+                                sd.setVector(tId, tv);
+                                sd.setVector(vId, vv);
+                            }
+                        }
+                    }
                     const result = ShaderExpressionEvaluator.evaluate(graph, { totalTime, deltaTime, propertyValues, hasContinuousSpawn });
                     if (result == null)
                         continue;
                     const ids = [Laya.Shader3D.propertyNameToID(uniformName)];
                     if (uniformName.startsWith("_"))
                         ids.push(Laya.Shader3D.propertyNameToID(uniformName.substring(1)));
+                    // IDE 编译 shader 时会剥掉 uniform 名里【全部】下划线(_MainTextureColor→MainTextureColor,
+                    // Alpha_Multiplier→AlphaMultiplier 中间的也剥)。上面只补了前导下划线变体,带中间下划线的
+                    // 属性(如 Alpha_Multiplier)对不上编译名 → 不生效。这里补一个去掉所有下划线的变体兜底。
+                    const noUnderscore = uniformName.replace(/_/g, "");
+                    if (noUnderscore !== uniformName && noUnderscore !== uniformName.substring(1))
+                        ids.push(Laya.Shader3D.propertyNameToID(noUnderscore));
                     if (graph.outputType === "float") {
                         const v = Number(result) || 0;
                         for (const sd of allDatas)
@@ -5779,9 +5914,10 @@
                 const camTransform = cameraModuleData.transform;
                 const cameraWorldPos = camTransform.position;
                 camTransform.getForward(_tempCamForward);
+                camTransform.getUp(_tempCamUp);
                 for (let system of this.systems) {
                     if (system instanceof VFXParticleSystem) {
-                        system.setOrientCamera(this.cmd, cameraWorldPos, _tempCamForward);
+                        system.setOrientCamera(this.cmd, cameraWorldPos, _tempCamForward, _tempCamUp);
                     }
                 }
             }

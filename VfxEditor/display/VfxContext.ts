@@ -45,6 +45,10 @@ export class VfxContext extends gui.Widget {
     private _flowOutRow: gui.Widget | null = null;
     /** createPropRow 生成的属性行 Widget（用于清理） */
     private _propRowWidgets: gui.Widget[] = [];
+    /** ShaderGraph 输出：从 .bps 读出的材质暴露属性列表（异步加载后缓存） */
+    private _matProps: Array<{ uniformName: string; fieldType: string; bpsDefault: any }> | null = null;
+    /** 已加载材质属性的 shaderRes（避免重复加载；变了才重读） */
+    private _matPropsLoadedKey: string = "";
     private _isRebuilding: boolean = false;
     private _isSelected: boolean = false;
     /** bg 矩形在 widget 内的起始 Y */
@@ -249,6 +253,9 @@ export class VfxContext extends gui.Widget {
             }
         }
 
+        // ── ShaderGraph 输出：材质属性面板(读 .bps 暴露属性 + 逐 VFX 可编辑) ──
+        yOffset = this._addMaterialProperties(yOffset);
+
         for (const bd of this.contextData.blocks) {
             const bDef = getBlockDef(bd.typeId);
             if (!bDef) continue;
@@ -290,6 +297,212 @@ export class VfxContext extends gui.Widget {
 
     private _getBlocksStartY(): number {
         return this._bgY + VfxContext.HEADER_HEIGHT;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 材质属性面板(ShaderGraph 输出):读 shaderRes 指向的 .bps 暴露属性,
+    // 逐 VFX 可编辑。纹理→shaderPropertyDefaults;数值/vec→写成单 Constant
+    // expression(运行时已有 expression 求值会应用);动画(曲线/渐变,标 ◆)只读。
+    // ─────────────────────────────────────────────────────────────
+    private _isShaderGraphOutput(): boolean {
+        const t = this.contextData.typeId;
+        return t === "outputShaderGraphMesh" || t === "outputShaderGraphQuad";
+    }
+
+    private _addMaterialProperties(yOffset: number): number {
+        if (!this._isShaderGraphOutput()) return yOffset;
+        const shaderRes = (this.contextData.props?.shaderRes as string) || "";
+        if (!shaderRes) return yOffset;
+        if (this._matPropsLoadedKey !== shaderRes) {
+            this._matPropsLoadedKey = shaderRes;
+            this._matProps = null;
+            this._loadMaterialProps(shaderRes);
+            return yOffset;   // 异步加载中,加载完会 rebuild
+        }
+        const props = this._matProps;
+        if (!props || props.length === 0) return yOffset;
+        if (!this.contextData.props) this.contextData.props = {};
+        const W = VfxContext.CTX_WIDTH;
+        const inputRight = W - 10;
+        for (const mp of props) {
+            const animated = this._isMatPropAnimated(mp.uniformName);
+            const propDef: IVfxPropDef = {
+                name: "matprop_" + mp.uniformName,
+                caption: (animated ? "◆ " : "") + mp.uniformName,
+                type: mp.fieldType,
+            } as IVfxPropDef;
+            const childCountBefore = this.numChildren;
+            const rowResult = createPropRow({
+                propDef,
+                parent: this,
+                nodeId: this.contextData.id,
+                stage: this._stage,
+                getData: () => this._getMatPropValue(mp),
+                setData: (v: any) => { if (!animated) this._setMatPropValue(mp, v); },
+                buildSlotId: (name: string) => name,
+                onRebuild: () => { this.rebuildBlocks(); this._stage.refreshAllLines(); },
+                expandState: this.contextData.props!,
+                startY: yOffset,
+                labelX: 10,
+                inputRight,
+                containerWidth: W,
+            });
+            for (let ci = childCountBefore; ci < this.numChildren; ci++) this._propRowWidgets.push(this.getChildAt(ci));
+            yOffset += rowResult.height;
+        }
+        return yOffset;
+    }
+
+    private async _loadMaterialProps(shaderRes: string): Promise<void> {
+        try {
+            let uuid = shaderRes;
+            if (uuid.startsWith("res://")) uuid = uuid.slice("res://".length);
+            const info = await Editor.assetDb.getAsset(uuid);
+            if (!info) { this._matProps = []; return; }
+            const path = Editor.assetDb.getFullPath(info);
+            const bps = await IEditor.utils.readJsonAsync(path);
+            const arr = bps && bps.uniformData && bps.uniformData.uniformArr;
+            const list: Array<{ uniformName: string; fieldType: string; bpsDefault: any }> = [];
+            if (Array.isArray(arr)) {
+                for (const u of arr) {
+                    const d = u && u.data;
+                    if (!d || !d.uniformName) continue;
+                    const ft = this._bpsConstToFieldType(d.constDataID);
+                    if (!ft) continue;
+                    const def = d.inputList && d.inputList[0] ? d.inputList[0].defVal : undefined;
+                    list.push({ uniformName: d.uniformName, fieldType: ft, bpsDefault: def });
+                }
+            }
+            if (this._matPropsLoadedKey === shaderRes) {
+                this._matProps = list;
+                this.rebuildBlocks();
+                this._stage.refreshAllLines();
+            }
+        } catch (e) {
+            this._matProps = [];
+        }
+    }
+
+    private _bpsConstToFieldType(constDataID: string): string | null {
+        switch (constDataID) {
+            case "basic/Float": return "number";
+            case "basic/Vector2": return "vec2";
+            case "basic/Vector3": return "vec3";
+            case "basic/Vector4": return "vec4";
+            case "basic/Boolean": return "boolean";
+            case "texture/texture2D": return "Texture2D";
+            default: return null;
+        }
+    }
+
+    // .bps uniformName 常无下划线(MainTexture),但 VFX 存储 key 带下划线(_MainTexture)。
+    // 在 store 里按 [name, _name, 去下划线] 顺序找到实际 key。
+    private _matStorageKey(uniformName: string, store: any): string {
+        if (!store) return uniformName;
+        if (store[uniformName] != null) return uniformName;
+        if (store["_" + uniformName] != null) return "_" + uniformName;
+        const noU = uniformName.replace(/_/g, "");
+        if (store[noU] != null) return noU;
+        return uniformName;
+    }
+
+    private _matExprFor(uniformName: string): any {
+        const store = (this.contextData.props as any)?.shaderPropertyExpressions;
+        if (!store) return null;
+        return store[this._matStorageKey(uniformName, store)] || null;
+    }
+
+    private _isMatPropAnimated(uniformName: string): boolean {
+        const g = this._matExprFor(uniformName);
+        if (!g || !g.nodes) return false;
+        const PURE = ["Constant", "CombineVec2", "CombineVec3", "CombineVec4"];
+        for (const id in g.nodes) if (PURE.indexOf(g.nodes[id].kind) < 0) return true;
+        return false;
+    }
+
+    private _evalConstExpr(g: any): any {
+        if (!g || !g.nodes) return undefined;
+        const evalNode = (id: string): any => {
+            const n = g.nodes[id]; if (!n) return 0;
+            if (n.kind === "Constant") return n.value;
+            if (typeof n.kind === "string" && n.kind.indexOf("CombineVec") === 0) {
+                const comps = (n.inputs || []).map((iid: string) => Number(evalNode(iid)) || 0);
+                const keys = ["x", "y", "z", "w"];
+                const o: any = {};
+                comps.forEach((c: number, i: number) => { if (keys[i]) o[keys[i]] = c; });
+                return o;
+            }
+            return 0;
+        };
+        return evalNode(g.rootNodeId);
+    }
+
+    private _getMatPropValue(mp: { uniformName: string; fieldType: string; bpsDefault: any }): any {
+        const props = this.contextData.props as any;
+        const ft = mp.fieldType;
+        const g = this._matExprFor(mp.uniformName);
+        if (g) {
+            if (!this._isMatPropAnimated(mp.uniformName)) {
+                const v = this._evalConstExpr(g);
+                if (v != null) return this._toFieldValue(ft, v);
+            }
+            return this._toFieldValue(ft, mp.bpsDefault);   // 动画:仅展示 .bps 默认
+        }
+        const defStore = props && props.shaderPropertyDefaults;
+        const d = defStore ? defStore[this._matStorageKey(mp.uniformName, defStore)] : undefined;
+        if (d != null) return this._toFieldValue(ft, d);
+        return this._toFieldValue(ft, mp.bpsDefault);
+    }
+
+    // 写入用 key:优先复用已有 key(避免重复),否则用带下划线(转换器约定 refName)
+    private _matWriteKey(uniformName: string, store: any): string {
+        if (store) {
+            if (store[uniformName] != null) return uniformName;
+            if (store["_" + uniformName] != null) return "_" + uniformName;
+            const noU = uniformName.replace(/_/g, "");
+            if (store[noU] != null) return noU;
+        }
+        return uniformName.charAt(0) === "_" ? uniformName : "_" + uniformName;
+    }
+
+    private _setMatPropValue(mp: { uniformName: string; fieldType: string; bpsDefault: any }, v: any): void {
+        if (!this.contextData.props) this.contextData.props = {};
+        const props = this.contextData.props as any;
+        const ft = mp.fieldType;
+        if (ft === "Texture2D") {
+            if (!props.shaderPropertyDefaults) props.shaderPropertyDefaults = {};
+            let uuid: string | null = null;
+            if (v && typeof v === "object" && v._$uuid) uuid = v._$uuid;
+            else if (typeof v === "string") uuid = v.indexOf("res://") === 0 ? v.slice(6) : v;
+            const key = this._matWriteKey(mp.uniformName, props.shaderPropertyDefaults);
+            props.shaderPropertyDefaults[key] = uuid ? ("res://" + uuid) : "";
+            // 主纹理同时写 props.mainTexture —— 让基础 mesh 路径(shaderName 空/无 shadergraph 材质时)
+            // 也能显示纹理(引擎 getMeshTexturedMaterial 读 geometry.mainTexture)。对齐 Unity:Main Texture 直接驱动纹理。
+            const _un = mp.uniformName.replace(/^_/, "").toLowerCase();
+            if (_un === "maintexture" || _un === "maintex") {
+                props.mainTexture = uuid ? ("res://" + uuid) : "";
+            }
+        } else {
+            if (!props.shaderPropertyExpressions) props.shaderPropertyExpressions = {};
+            const outType = ft === "color" ? "vec4" : ft === "number" ? "float" : ft;
+            const key = this._matWriteKey(mp.uniformName, props.shaderPropertyExpressions);
+            props.shaderPropertyExpressions[key] = {
+                rootNodeId: "c", outputType: outType,
+                nodes: { c: { kind: "Constant", outputType: outType, value: v } },
+            };
+        }
+    }
+
+    private _toFieldValue(ft: string, v: any): any {
+        if (ft === "Texture2D") {
+            // asset 字段(_createAssetRow)用裸 assetId(uuid)字符串,不是 {_$uuid}/res://
+            if (!v) return "";
+            if (typeof v === "object" && v._$uuid) return v._$uuid;
+            if (Array.isArray(v)) v = v.length > 0 ? v[0] : "";
+            if (typeof v === "string") return v.indexOf("res://") === 0 ? v.slice(6) : v;
+            return "";
+        }
+        return v;
     }
 
     /**

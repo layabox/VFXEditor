@@ -90,12 +90,15 @@ function findOrientBlock(blocks?: IVfxBlockData[]): IVfxBlockData | null {
 }
 
 /** orient 模式需要哪些 camera uniform */
-function orientCameraNeeds(block: IVfxBlockData | null): { pos: boolean; dir: boolean } {
-    if (!block) return { pos: false, dir: false };
+function orientCameraNeeds(block: IVfxBlockData | null): { pos: boolean; dir: boolean; up: boolean } {
+    if (!block) return { pos: false, dir: false, up: false };
     const mode = (block.props?.mode as string) || "Face Camera Plane";
     return {
         pos: mode === "Face Camera Position" || mode === "Fixed Axis",
         dir: mode === "Face Camera Plane",
+        // Unity Orient.cs LookAtPosition/LookAtLine: axisX = cross(GetVFXToViewRotMatrix()[1], axisZ)
+        //   即用【相机 up 轴】做 twist(相机感知),而非世界 up → 面片随相机均匀朝向。需 u_OrientCameraUp。
+        up: mode === "Look At Position" || mode === "Look At Line",
     };
 }
 
@@ -229,14 +232,18 @@ function genOrientCode(block: IVfxBlockData, attrNames: Set<string>, indent: str
             } else {
                 lines.push(`${indent}vec3 _target = ${target};`);
             }
-            // Unity Orient.cs LookAtPosition: axisZ = normalize(position - Position) — 从 target 朝 particle 远离方向（mesh face 朝外）
-            // 之前实现写成 target - pos (朝中心) 让 mesh face 朝内 → Aura wall plane 视觉错（粒子 mesh 反向）
+            // Unity Orient.cs LookAtPosition (非 strip, 229-231 行,1:1 对齐源码):
+            //   axisZ = normalize(position - Position);                                                // 径向朝外(粒子 - target)
+            //   axisX = VFXSafeNormalizedCross(GetVFXToViewRotMatrix()[1].xyz, axisZ, float3(1,0,0));  // cross(【相机 up】, axisZ), 退化 fallback (1,0,0)
+            //   axisY = cross(axisZ, axisX);
+            // 用相机 up(u_OrientCameraUp 转 emitter-local),退化 fallback (1,0,0)。
+            lines.push(`${indent}vec3 _camUp = normalize(mat3(u_InvEmitterWorldMatrix) * u_OrientCameraUp);`);
             lines.push(`${indent}vec3 _lookDir = ${pos} - _target;`);
             lines.push(`${indent}float _lookDist = length(_lookDir);`);
             lines.push(`${indent}vec3 _orientZ = (_lookDist > 0.001) ? _lookDir / _lookDist : vec3(0.0, 0.0, 1.0);`);
-            lines.push(`${indent}vec3 _cross1 = cross(vec3(0.0, 1.0, 0.0), _orientZ);`);
+            lines.push(`${indent}vec3 _cross1 = cross(_camUp, _orientZ);`);
             lines.push(`${indent}float _cross1Len = length(_cross1);`);
-            lines.push(`${indent}vec3 _orientX = (_cross1Len > 0.001) ? _cross1 / _cross1Len : normalize(cross(vec3(0.0, 0.0, 1.0), _orientZ));`);
+            lines.push(`${indent}vec3 _orientX = (_cross1Len > 0.001) ? _cross1 / _cross1Len : vec3(1.0, 0.0, 0.0);`);
             lines.push(`${indent}vec3 _orientY = cross(_orientZ, _orientX);`);
             break;
         }
@@ -371,12 +378,19 @@ void writeRenderData(uint renderIndex, Particle p${hasOrient ? ", vec3 _orientX,
     float _maxC = max(_writeColor.r, max(_writeColor.g, _writeColor.b));
     if (_maxC > 1.0) _writeColor /= _maxC;
 
+    // ⭐ per-particle 固定随机(0..1) → render data base[4].w(a_AttrPivot.w),供 render shader 做纹理 UV 逐粒子偏移
+    //    让每个粒子采样纹理不同区域(对齐 Unity _MainTextureOffset 的 Random 算子 → 雾各自独立飘动,不再一起动)。
+    //    用 p.seed(每粒子固定,readParticle 从 base[2].w 读)做自包含整数 hash,不依赖 WangHash 定义顺序。
+    uint _prh = p.seed;
+    _prh ^= _prh >> 16u; _prh *= 0x7feb352du; _prh ^= _prh >> 15u; _prh *= 0x846ca68bu; _prh ^= _prh >> 16u;
+    float _particleRand = float(_prh) / 4294967295.0;
+
     uint base = renderIndex * RENDER_STRIDE;
     Render.data[base]      = vec4(${pos}, normalizedAge);    // position + normalizedAge
     Render.data[base + 1u] = vec4(_writeColor, ${alpha});      // color (HDR-normalized) + alpha
     Render.data[base + 2u] = rotation;                       // combined rotation quaternion
     Render.data[base + 3u] = vec4(finalScale, ${texIndex});  // scale + texIndex
-    Render.data[base + 4u] = vec4(${pivot}, 0.0);            // pivot + reserved
+    Render.data[base + 4u] = vec4(${pivot}, _particleRand);  // pivot + per-particle random(纹理逐粒子偏移源)
 }`;
 }
 
@@ -435,7 +449,8 @@ Shader3D Start
             u_EmitterWorldMatrix: { type: "Matrix4x4" },
             u_InvEmitterWorldMatrix: { type: "Matrix4x4" }${orientCamera.pos ? `,
             u_OrientCameraPos: { type: "Vector3" }` : ""}${orientCamera.dir ? `,
-            u_OrientCameraDir: { type: "Vector3" }` : ""}/*VFX_EXTRA_UNIFORMS*/
+            u_OrientCameraDir: { type: "Vector3" }` : ""}${orientCamera.up ? `,
+            u_OrientCameraUp: { type: "Vector3" }` : ""}/*VFX_EXTRA_UNIFORMS*/
         }
     ],
     code: "Output_CS"

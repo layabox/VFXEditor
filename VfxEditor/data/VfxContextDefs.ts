@@ -156,6 +156,8 @@ export const VFX_CONTEXT_DEFS: IVfxContextTypeDef[] = [
         compatibleBlocks: ["setAttribute", "setAttributeCurve", "attributeFromMap", "orient", "cameraFade", "colorOverLife", "alphaOverLife", "connectTarget", "flipbookPlay", "screenSpaceSize"],
         properties: [
             { name: "mesh", caption: "Mesh", type: "Mesh" },
+            // 对齐 Unity Output Mesh 的 Main Texture —— 基础 mesh(无 shadergraph)也能直接设纹理。
+            { name: "mainTexture", caption: "Main Texture", type: "Texture2D", default: "" },
             BLEND_MODE_PROP,
             { name: "useAlphaClipping", caption: "Use Alpha Clipping", type: "boolean", default: false },
             { name: "alphaThreshold", caption: "Alpha Threshold", type: "number", default: 0.5, min: 0, max: 1, step: 0.01, hidden: "!data.useAlphaClipping" },
@@ -198,6 +200,8 @@ export const VFX_CONTEXT_DEFS: IVfxContextTypeDef[] = [
         compatibleBlocks: ["setAttribute", "setAttributeCurve", "attributeFromMap", "orient", "cameraFade", "colorOverLife", "alphaOverLife", "connectTarget", "flipbookPlay", "screenSpaceSize"],
         properties: [
             { name: "mesh", caption: "Mesh", type: "Mesh" },
+            // 节点级 Main Texture(独立于 shadergraph)—— 即使清空 Shader Res 也保留,基础材质直接显示纹理。对齐 Unity Output Mesh 的 Main Texture。
+            { name: "mainTexture", caption: "Main Texture", type: "Texture2D", default: "" },
             { name: "shaderName", caption: "Shader Name", type: "string", default: "VFXUnlit" },
             { name: "shaderRes", caption: "Shader Res", type: "string", default: "" },
             BLEND_MODE_PROP,
