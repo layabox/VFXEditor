@@ -202,12 +202,16 @@ export class VfxBlock {
         cb.setSize(15, 19);
         cb.selected = this.blockData.enabled;
 
+        // pointer_down 只阻止冒泡（防止点复选框时把 block 选中/拖拽）；toggle 逻辑走 changed
         cb.on("pointer_down", (e: gui.Event) => {
-            if (e.input.button !== 0) return;
-            e.stopPropagation();
-            this.blockData.enabled = !this.blockData.enabled;
-            const ctxUI = this._stage?.getContextUI(this._parentContextId);
-            if (ctxUI) ctxUI.rebuildBlocks();
+            if (e.input.button === 0) e.stopPropagation();
+        }, this);
+        // 复选框状态变更 → 同步数据 + 原地重设视觉。
+        // 不再 rebuildBlocks()：那样会重建整个 context 的所有 block，产生一帧撕裂闪烁；
+        // enabled 只影响本 block 的 bg/label 颜色，原地改即可。
+        cb.on("changed", () => {
+            this.blockData.enabled = cb.selected;
+            this._applyEnabledVisual();
         }, this);
 
         this._ui.addChild(cb);
@@ -222,6 +226,13 @@ export class VfxBlock {
         this._inputSlots.push(enableSlot);
 
         return cb;
+    }
+
+    /** 原地重设 enabled 视觉（bg 卡片色 + 标题色），不重建 → 无闪烁。三种 UI 变体共用 _bgCard/_label 字段 */
+    private _applyEnabledVisual(): void {
+        const on = this.blockData.enabled;
+        if (this._bgCard) this._bgCard.getGraphics(gui.SRect).fillColor.parse(on ? "#2a2a2a" : "#1e1e1e");
+        if (this._label) this._label.color = on ? 0xCCCCCC : 0x555555;
     }
 
     // ---- 默认 Block UI ----

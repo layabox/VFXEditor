@@ -97,7 +97,9 @@ export class VfxInspectorPanel {
         if (!dataObj.props) dataObj.props = {};
         for (const prop of properties) {
             if (prop.default != null && dataObj.props[prop.name] == null) {
-                dataObj.props[prop.name] = prop.default;
+                // 对象型默认值（曲线/渐变/AABox 等）深拷贝，避免多个节点共享同一引用 → 改一个全改
+                dataObj.props[prop.name] = (typeof prop.default === "object")
+                    ? JSON.parse(JSON.stringify(prop.default)) : prop.default;
             }
         }
 

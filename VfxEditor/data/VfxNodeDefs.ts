@@ -14,6 +14,7 @@
  */
 
 import { FlagsField } from "../display/FlagsField";
+import { VfxCurveField } from "../display/VfxCurveField";
 import type { IVfxEventTypeDef, IVfxContextTypeDef, IVfxBlockTypeDef, IVfxOperatorTypeDef } from "./VfxTypes";
 
 // ─── Re-export 三类定义 ──────────────────────────────
@@ -119,8 +120,8 @@ function buildPropSettingsDescriptors(vfxType: string): IEditor.FPropertyDescrip
             props.push({ name: "default", caption: "Value", type: "Gradient" } as any);
             break;
         case "Curve":
-            // LayaIDE 无内置 Curve inspector；先不提供 default 编辑器，让 exposed + tooltip 兜底
-            // 避免点击 Curve property 时 vfx_propset_Curve type 缺失报 not iterable
+            // 复用 VfxCurveField（桥接 frames/frameData ↔ 内置 CurveInput）
+            props.push({ name: "default", caption: "Value", inspector: "vfxCurve" } as any);
             break;
         case "Texture2D":
         case "Mesh":
@@ -185,6 +186,8 @@ function resolveProps(props: IEditor.FPropertyDescriptor[]): IEditor.FPropertyDe
 export function registerAllVfxTypes(captionTrans?: Record<string, string>, tipsTrans?: Record<string, string>): void {
     // 注册自定义 Inspector 控件
     IEditor.InspectorRegistry.registerFieldClass("flags", FlagsField as any);
+    // VFX 曲线编辑器（桥接 frameData/frames ↔ 内置 CurveInput），属性定义用 inspector:"vfxCurve" 选用
+    IEditor.InspectorRegistry.registerFieldClass("vfxCurve", VfxCurveField as any);
 
     // 把翻译直接写回 def.title —— VfxContext/Block/Event 节点头部直接读 def.title，
     // 不走 typeRegistry。Add Node / Add Block 菜单刻意保留英文原名 (def._enTitle)，

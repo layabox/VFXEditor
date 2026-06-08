@@ -1902,7 +1902,7 @@ export const VFX_OPERATOR_DEFS: IVfxOperatorTypeDef[] = [
         outputs: [{ id: "curve", name: "Curve", type: "curve" }],
         properties: [
             {
-                name: "curve", caption: "Curve", type: "Curve", inspector: "animationCurve",
+                name: "curve", caption: "Curve", type: "Curve", inspector: "vfxCurve",
                 default: { frameData: [0, 0, 0, 1, 0.333, 0.333, 0, 1, 1, 0, 1, 0.333, 0.333, 0] },
                 nodeHidden: true,
             } as any,
@@ -1918,7 +1918,16 @@ export const VFX_OPERATOR_DEFS: IVfxOperatorTypeDef[] = [
             { id: "t", name: "Time", type: "float", default: 0 },
         ],
         outputs: [{ id: "value", name: "Value", type: "float" }],
-        properties: [],
+        properties: [
+            // 内联曲线：Unity 的 Sample Curve 自带 AnimationCurve，转换器存在本节点 props.curve.frameData。
+            // curve 输入槽未连接时编译器用这条内联曲线（见 VfxExprCompiler._compileSampleCurve）。
+            // nodeHidden → 不占节点体，只在右侧 Inspector 用 vfxCurve 编辑器渲染。
+            {
+                name: "curve", caption: "Curve", type: "Curve", inspector: "vfxCurve",
+                default: { frameData: [0, 0, 0, 1, 0.333, 0.333, 0, 1, 1, 0, 1, 0.333, 0.333, 0] },
+                nodeHidden: true,
+            } as any,
+        ],
     },
 
     // ── Math / Geometry (Extended) ──

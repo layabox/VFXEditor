@@ -257,20 +257,23 @@ export class VfxPropertyPanel {
         bg.getGraphics(gui.SRect).fillColor.parse("#383838");
         row.addChild(bg);
 
+        // 文字垂直居中：用 height=20 + y=4（跟属性行 nameInput 一致），
+        // 不再用 height=HEADER_H + y=0（那样文字顶对齐偏高，跟下方属性行对不齐）
+        const TXT_H = 20, TXT_Y = 4;
         const fold = new gui.TextField();
         fold.text = this._groupCollapsed.get(groupName) ? "▶" : "▼";
         fold.color = 0xCCCCCC;
         try { fold.style.fontSize = 12; } catch { }
-        fold.setSize(16, HEADER_H);
-        fold.setPos(6, 0);
+        fold.setSize(16, TXT_H);
+        fold.setPos(6, TXT_Y);
         row.addChild(fold);
 
         const label = new gui.TextField();
         label.text = groupName;
         label.color = 0xDDDDDD;
         try { label.style.fontSize = 12; } catch { }
-        label.setSize(cardW - 28, HEADER_H);
-        label.setPos(24, 0);
+        label.setSize(cardW - 28, TXT_H);
+        label.setPos(24, TXT_Y);
         row.addChild(label);
 
         const onDown = (e: gui.Event) => {
