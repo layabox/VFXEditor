@@ -491,7 +491,7 @@ export const VFX_BLOCK_DEFS: IVfxBlockTypeDef[] = [
         properties: [
             { name: "attribute", caption: "Attribute", type: "string", enumSource: VFX_SETTABLE_ATTRIBUTES.map((a: { name: string }) => a.name), default: "size" },
             {
-                name: "curve", caption: "Curve", type: "Curve", inspector: "animationCurve",
+                name: "curve", caption: "Curve", type: "Curve", inspector: "vfxCurve",
                 default: { frameData: [0, 0, 0, 1, 0.333, 0.333, 0, 1, 1, 0, 1, 0.333, 0.333, 0] },
                 hidden: "data.attribute === 'color'",
             } as any,

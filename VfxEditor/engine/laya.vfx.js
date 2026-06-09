@@ -3371,6 +3371,7 @@
             this.sleeping = false;
         }
         internalInit(rand) {
+            this.sleeping = false;
             this.nextTriggerTime = sampleRange(this.delay, rand);
             this.sampledCount = Math.round(sampleRange(this.count, rand));
         }

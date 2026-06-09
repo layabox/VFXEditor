@@ -956,19 +956,25 @@ export function genBlockCode(
             lines.push(`    // vortex — Unity VortexForceField.cs`);
             lines.push(`    {`);
             lines.push(`        vec3 _vxAxis = normalize(vec3(${toFloat(nrm.x)}, ${toFloat(nrm.y)}, ${toFloat(nrm.z)}));`);
-            lines.push(`        vec3 _vxFromPlane = ${particleVar}.position - vec3(${toFloat(pos.x)}, ${toFloat(pos.y)}, ${toFloat(pos.z)});`);
-            lines.push(`        float _vxDistAlongAxis = dot(_vxAxis, _vxFromPlane);`);
-            lines.push(`        vec3 _vxRadialVec = _vxFromPlane - _vxDistAlongAxis * _vxAxis;`);
+            lines.push(`        vec3 _vxRel = ${particleVar}.position - vec3(${toFloat(pos.x)}, ${toFloat(pos.y)}, ${toFloat(pos.z)});`);
+            // ★恢复昨天验证可工作的版本(用户确认"上下两环都有了"): 方向向量【不归一化】(模长=d),
+            //   力随距离 d 自然衰减,避免归一化版的过度向心收缩(那是粒子聚成实心白椭圆的回归根因)
+            lines.push(`        float _vxAxialLen = dot(_vxRel, _vxAxis);`);
+            lines.push(`        vec3 _vxRadialVec = _vxRel - _vxAxialLen * _vxAxis;`);          // 径向向量(向外, 模长=d)
             lines.push(`        float _vxRadialDist = length(_vxRadialVec);`);
-            lines.push(`        vec3 _vxRadialDir = _vxRadialDist > 1e-6 ? _vxRadialVec / _vxRadialDist : vec3(1.0, 0.0, 0.0);`);
-            lines.push(`        vec3 _vxTangentDir = cross(_vxAxis, _vxRadialDir);`);
-            lines.push(`        float _vxT = clamp(_vxRadialDist, 0.0, 1.0);`);   // curve sample at distance, clamp 0-1
-            lines.push(`        float _vxChannel = mix(${ch.v0}, ${ch.v1}, _vxT);`);
-            lines.push(`        float _vxGravity = mix(${gv.v0}, ${gv.v1}, _vxT);`);
+            lines.push(`        vec3 _vxTangentVec = cross(_vxRel, _vxAxis);`);                // 切向(模长=d)
+            lines.push(`        float _vxT = clamp(_vxRadialDist, 0.0, 1.0);`);
             lines.push(`        float _vxVortex = mix(${vx.v0}, ${vx.v1}, _vxT);`);
-            lines.push(`        ${particleVar}.velocity += (_vxAxis * _vxChannel + _vxRadialDir * _vxGravity + _vxTangentDir * _vxVortex) * u_DeltaTime;`);
+            lines.push(`        float _vxGravity = mix(${gv.v0}, ${gv.v1}, _vxT);`);
+            // ★particleIndex(非 seed): WangHash seed 经 float(p.seed) 存储丢最低位 → seed%2 恒 0 → 全部向下;
+            //   particleIndex 是 buffer 槽位 uint, single burst 下=spawn 顺序, 奇偶分上下两环
+            lines.push(`        float _vxChSign = (particleIndex % 2u == 1u) ? 1.0 : -1.0;`);
+            lines.push(`        float _vxChannel = _vxChSign * mix(${ch.v0}, ${ch.v1}, _vxT);`);
+            // 轴向 channel(上下分层) - 径向(向心: -radialVec×gravity) + 切向(旋转: tangentVec×vortex), 全不归一化
+            lines.push(`        vec3 _vxTarget = _vxAxis * _vxChannel - _vxRadialVec * _vxGravity + _vxTangentVec * _vxVortex;`);
             lines.push(`        float _vxMass = ${particleVar}.mass > 0.0 ? ${particleVar}.mass : 1.0;`);
-            lines.push(`        ${particleVar}.velocity *= exp(-${drag} * u_DeltaTime / _vxMass);`);
+            // Force(Mode=Relative): 速度收敛到有界 target, 不加性累积→不炸开
+            lines.push(`        ${particleVar}.velocity += (_vxTarget - ${particleVar}.velocity) * min(1.0, ${drag} * u_DeltaTime / _vxMass);`);
             lines.push(`    }`);
             continue;
         }
