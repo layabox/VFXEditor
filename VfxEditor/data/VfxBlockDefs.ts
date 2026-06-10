@@ -495,6 +495,16 @@ export const VFX_BLOCK_DEFS: IVfxBlockTypeDef[] = [
                 default: { frameData: [0, 0, 0, 1, 0.333, 0.333, 0, 1, 1, 0, 1, 0.333, 0.333, 0] },
                 hidden: "data.attribute === 'color'",
             } as any,
+            // vec3 属性(scale 等)的 per-channel 曲线：Y/Z 通道独立曲线(可选,未设时 broadcast 主 curve)。
+            // 对齐 Unity AttributeFromCurve 的 Scale_x/y/z 三曲线(Barrier walls 烟雾片 z 从 0 生长的翻滚动态依赖此)。
+            {
+                name: "curveY", caption: "Curve Y", type: "Curve", inspector: "vfxCurve",
+                hidden: "data.attribute !== 'scale' && data.attribute !== 'angle' && data.attribute !== 'velocity'",
+            } as any,
+            {
+                name: "curveZ", caption: "Curve Z", type: "Curve", inspector: "vfxCurve",
+                hidden: "data.attribute !== 'scale' && data.attribute !== 'angle' && data.attribute !== 'velocity'",
+            } as any,
             // attribute=color 时显示 gradient editor 而不是 curve（对齐 Unity 的 SetColor block UX）
             // 编译时优先读 gradient props 生成 sampleGradient GLSL
             {

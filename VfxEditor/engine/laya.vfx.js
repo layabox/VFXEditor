@@ -1,4 +1,4 @@
-(function (exports, Laya) {
+﻿(function (exports, Laya) {
     'use strict';
 
     exports.VFXUpdateMode = void 0;
@@ -842,9 +842,10 @@
             }
             return mat;
         }
-        static getCustomShaderMaterial(shaderName, blendMode = "Alpha") {
+        static getCustomShaderMaterial(shaderName, blendMode = "Alpha", instanceKey = "") {
             var _a, _b, _c, _d, _e, _f;
-            const key = `${shaderName}__${blendMode}`;
+            // instanceKey: per-system 材质实例(多系统共用 custom shader 时 per-system uniform 互覆盖修复)
+            const key = `${shaderName}__${blendMode}__${instanceKey}`;
             let mat = VFXRenderer._customShaderMaterialCache.get(key);
             if (mat)
                 return mat;
@@ -864,7 +865,7 @@
                         .then(() => console.log(`[VFX Renderer] custom shader '${shaderName}' loaded (url=${url})`))
                         .catch((err) => console.warn(`[VFX Renderer] custom shader '${shaderName}' load failed`, err));
                 }
-                return VFXRenderer.getCustomShaderMaterial("VFXUnlit", blendMode);
+                return VFXRenderer.getCustomShaderMaterial("VFXUnlit", blendMode, instanceKey);
             }
             mat = new Laya.Material();
             mat.setShaderName(shaderName);
@@ -1144,7 +1145,7 @@
                     const bbPrim = geometry.primitive || "";
                     const isBillboardProcedural = outType === "outputBillboard" && !!bbPrim;
                     if (customShaderName) {
-                        const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, mode);
+                        const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, mode, geometry.matInstanceKey || "");
                         element.material = mat;
                     }
                     else if (outType === "outputCube") {
@@ -2098,6 +2099,8 @@
         constructor() {
             var _a;
             super();
+            // per-system 材质实例 key(多系统共用 custom shader 时 per-system uniform 互覆盖修复)
+            this.matInstanceKey = "s" + (VFXParticleSystem._matUidCounter = (VFXParticleSystem._matUidCounter || 0) + 1);
             this.spawnerSystems = [];
             this.boundsMode = exports.VFXBoundsMode.Automatic;
             this.boundsCenter = new Laya.Vector3(0, 0, 0);
@@ -2567,6 +2570,8 @@
                         this.geometry.subpixelAA = this.subpixelAA;
                         this.geometry.customShaderName = this.customShaderName;
                     }
+                    if (this.geometry)
+                        this.geometry.matInstanceKey = this.matInstanceKey;
                 }
                 catch (e) {
                     console.warn("VFXParticleSystem: geometry creation failed, compute pipeline will still run.", e);
@@ -3538,7 +3543,6 @@
         async parse(data) {
             var _a, _b, _c, _d, _e, _f, _g, _h;
             const vfxAsset = new VFXAsset();
-            console.log(`[VFX-DBG] runtime parse systems=${(data.systems || []).length}`, (data.systems || []).map((s, i) => `${i}:${s.type}${s.capacity != null ? `(cap=${s.capacity})` : ""}`).join(","));
             let updateMode = exports.VFXUpdateMode.FixedDeltaTime;
             if (data.fixedDeltaTime === false) {
                 updateMode |= exports.VFXUpdateMode.DeltaTime;
@@ -5408,7 +5412,7 @@
                 const customShaderName = sys.customShaderName;
                 const blendMode = sys.blendMode || "Alpha";
                 if (customShaderName) {
-                    const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, blendMode);
+                    const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, blendMode, sys.matInstanceKey || "");
                     if (mat && mat.shaderData && allDatas.indexOf(mat.shaderData) === -1)
                         allDatas.push(mat.shaderData);
                 }
@@ -5511,12 +5515,6 @@
         }
         onStart() {
             console.log("VisualEffect onStart", this, this.asset);
-            console.log(`[VFX-DBG] VE onStart systems=${this.systems.length}`, this.systems.map((s, i) => {
-                var _a;
-                const cap = (_a = s.capacity) !== null && _a !== void 0 ? _a : (s.desc && s.desc.capacity);
-                const t = s.constructor.name;
-                return `${i}:${t}${cap != null ? `(cap=${cap})` : ""}`;
-            }).join(","));
         }
         onAwake() {
             var _a, _b;
@@ -5793,7 +5791,7 @@
                 const customShaderName = sys.customShaderName;
                 const blendMode = sys.blendMode || "Alpha";
                 if (customShaderName) {
-                    const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, blendMode);
+                    const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, blendMode, sys.matInstanceKey || "");
                     if (mat && mat.shaderData && allDatas.indexOf(mat.shaderData) === -1)
                         allDatas.push(mat.shaderData);
                 }
@@ -5824,6 +5822,86 @@
                             for (const sd of allDatas) {
                                 sd.setVector(tId, tv);
                                 sd.setVector(vId, vv);
+                            }
+                        }
+                    }
+                    // per-particle Disappear 曲线 shaping: 还原 Unity 出生 fade-in + 死亡 fade-out
+                    // (纯线性 v_NormalizedAge 让新生粒子立即全显 → 顶部亮环;老年慢淡 → 底部长尾)。
+                    if (uniformName === "_Disappear" || uniformName === "Disappear") {
+                        const root = graph.nodes && graph.nodes[graph.rootNodeId];
+                        if (root && root.kind === "SampleCurve" && root.inputs && root.inputs.length > 0) {
+                            const cnode = graph.nodes[root.inputs[0]];
+                            const curve = cnode && cnode.kind === "Constant" ? cnode.value : null;
+                            if (curve && Array.isArray(curve.frames) && curve.frames.length > 0) {
+                                let times = curve.frames.map((f) => Number(f.time) || 0).sort((a, b) => a - b);
+                                if (times.length > 4)
+                                    times = [0, 1 / 3, 2 / 3, 1];
+                                while (times.length < 4)
+                                    times.push(times.length ? times[times.length - 1] : 1);
+                                const sc = (t) => ShaderExpressionEvaluator._sampleCurve(curve, t) || 0;
+                                const eId = Laya.Shader3D.propertyNameToID("u_VfxDisCurveEnable");
+                                const tId3 = Laya.Shader3D.propertyNameToID("u_VfxDisTimes");
+                                const vId3 = Laya.Shader3D.propertyNameToID("u_VfxDisVals");
+                                const tv3 = new Laya.Vector4(times[0], times[1], times[2], times[3]);
+                                const vv3 = new Laya.Vector4(sc(times[0]), sc(times[1]), sc(times[2]), sc(times[3]));
+                                for (const sd of allDatas) {
+                                    sd.setNumber(eId, 1);
+                                    sd.setVector(tId3, tv3);
+                                    sd.setVector(vId3, vv3);
+                                }
+                            }
+                        }
+                    }
+                    // per-particle 颜色渐变: _MainTextureColor = SampleGradient(gradient, ageMedian) 时把 gradient
+                    // 烘成 4-stop uniform(u_VfxColorGradTimes/C0..C3 + Enable=1),render shader(ShaderBuild supportVFX
+                    // 注入的 vfxSampleColorGradient)按 v_NormalizedAge 分段采样 → 每粒子随年龄变色(新生亮青/老金棕)。
+                    // 未命中时 Enable 保持默认 0,shader 走原 uniform 路径,其它 VFX 零影响。
+                    if (uniformName === "_MainTextureColor") {
+                        const root = graph.nodes && graph.nodes[graph.rootNodeId];
+                        if (root && root.kind === "SampleGradient" && root.inputs && root.inputs.length > 0) {
+                            const gnode = graph.nodes[root.inputs[0]];
+                            let grad = null;
+                            if (gnode && gnode.kind === "VFXParameter") {
+                                const pv = (propertyValues && gnode.exposedName) ? propertyValues.get(gnode.exposedName) : null;
+                                if (pv && pv.rawGradientStops && pv.rawGradientStops.length > 0) {
+                                    grad = { __layaGradientStops: pv.rawGradientStops };
+                                }
+                                else if (gnode.defaultValue && (gnode.defaultValue.colorKeys || gnode.defaultValue.alphaKeys)) {
+                                    grad = gnode.defaultValue;
+                                }
+                            }
+                            if (grad) {
+                                const tSet = new Set();
+                                if (grad.__layaGradientStops) {
+                                    for (const s of grad.__layaGradientStops)
+                                        tSet.add(Number(s.t) || 0);
+                                }
+                                else {
+                                    for (const k of grad.colorKeys || [])
+                                        tSet.add(Number(k.time) || 0);
+                                    for (const k of grad.alphaKeys || [])
+                                        tSet.add(Number(k.time) || 0);
+                                }
+                                let times = [...tSet].sort((a, b) => a - b);
+                                if (times.length > 4)
+                                    times = [0, 1 / 3, 2 / 3, 1];
+                                while (times.length < 4)
+                                    times.push(times.length ? times[times.length - 1] : 1);
+                                const eId = Laya.Shader3D.propertyNameToID("u_VfxColorGradEnable");
+                                const tId2 = Laya.Shader3D.propertyNameToID("u_VfxColorGradTimes");
+                                const tv2 = new Laya.Vector4(times[0], times[1], times[2], times[3]);
+                                for (const sd of allDatas) {
+                                    sd.setNumber(eId, 1);
+                                    sd.setVector(tId2, tv2);
+                                }
+                                const cNames = ["u_VfxColorGradC0", "u_VfxColorGradC1", "u_VfxColorGradC2", "u_VfxColorGradC3"];
+                                for (let ci = 0; ci < 4; ci++) {
+                                    const col = ShaderExpressionEvaluator._sampleGradient(grad, times[ci]) || { r: 1, g: 1, b: 1, a: 1 };
+                                    const cId = Laya.Shader3D.propertyNameToID(cNames[ci]);
+                                    const cv = new Laya.Vector4(col.r, col.g, col.b, col.a);
+                                    for (const sd of allDatas)
+                                        sd.setVector(cId, cv);
+                                }
                             }
                         }
                     }

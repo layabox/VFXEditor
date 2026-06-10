@@ -2705,18 +2705,36 @@ function genSetAttributeCurveCode(
     } else {
         // curve 路径（原逻辑）：标量 curve → 按 attribute 类型 broadcast
         const _curveAttrType = getAttributeType(attrName);
-        const _sampleExpr = `SampleCurve(u_VfxBakedTex, ${curveExpr}, _curveT)`;
-        let _curveValExpr = _sampleExpr;
-        if (_curveAttrType === "vec3" || _curveAttrType === "color") {
-            _curveValExpr = `vec3(${_sampleExpr})`;
-        } else if (_curveAttrType === "vec4") {
-            _curveValExpr = `vec4(${_sampleExpr})`;
-        } else if (_curveAttrType === "vec2") {
-            _curveValExpr = `vec2(${_sampleExpr})`;
+        const pAny = p as any;
+        // vec3 属性 per-channel 三曲线（curve=X + curveY/curveZ，对齐 Unity AttributeFromCurve Scale_x/y/z）。
+        // 仅 block 内嵌 curve（无外接连线）时支持；缺省通道 broadcast 主 curve。
+        // 派生 curve id 用大偏移避开 graph 节点 id 空间（autoID 远小于 100000）。
+        const _hasPerChannel = _curveAttrType === "vec3" && compiler != null
+            && ((pAny.curveY && pAny.curveY.frameData) || (pAny.curveZ && pAny.curveZ.frameData));
+        if (_hasPerChannel) {
+            const cy = (pAny.curveY && pAny.curveY.frameData)
+                ? compiler.registerInlineCurve(100000 + block.id, pAny.curveY.frameData) : curveExpr;
+            const cz = (pAny.curveZ && pAny.curveZ.frameData)
+                ? compiler.registerInlineCurve(200000 + block.id, pAny.curveZ.frameData) : curveExpr;
+            blockLines.push(`${inner}vec3 _curveVal = vec3(`
+                + `SampleCurve(u_VfxBakedTex, ${curveExpr}, _curveT), `
+                + `SampleCurve(u_VfxBakedTex, ${cy}, _curveT), `
+                + `SampleCurve(u_VfxBakedTex, ${cz}, _curveT));`);
+            applyComposition(blockLines, attrName, "_curveVal", composition, p, inner, particleVar);
+        } else {
+            const _sampleExpr = `SampleCurve(u_VfxBakedTex, ${curveExpr}, _curveT)`;
+            let _curveValExpr = _sampleExpr;
+            if (_curveAttrType === "vec3" || _curveAttrType === "color") {
+                _curveValExpr = `vec3(${_sampleExpr})`;
+            } else if (_curveAttrType === "vec4") {
+                _curveValExpr = `vec4(${_sampleExpr})`;
+            } else if (_curveAttrType === "vec2") {
+                _curveValExpr = `vec2(${_sampleExpr})`;
+            }
+            blockLines.push(`${inner}${GLSL_TYPE[_curveAttrType] || "float"} _curveVal = ${_curveValExpr};`);
+            // 应用到属性
+            applyComposition(blockLines, attrName, "_curveVal", composition, p, inner, particleVar);
         }
-        blockLines.push(`${inner}${GLSL_TYPE[_curveAttrType] || "float"} _curveVal = ${_curveValExpr};`);
-        // 应用到属性
-        applyComposition(blockLines, attrName, "_curveVal", composition, p, inner, particleVar);
     }
 
     blockLines.push(`${indent}}`);
