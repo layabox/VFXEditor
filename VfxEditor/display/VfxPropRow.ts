@@ -58,7 +58,7 @@ const COMPOSITE_TYPES: Record<string, IVfxPropDef[]> = {
     ],
     transform: [
         { name: "position", caption: "Position", type: "vec3", default: { x: 0, y: 0, z: 0 }, slotType: "vec3" },
-        { name: "rotation", caption: "Rotation", type: "vec3", default: { x: 0, y: 0, z: 0 }, slotType: "vec3" },
+        { name: "rotation", caption: "Angles", type: "vec3", default: { x: 0, y: 0, z: 0 }, slotType: "vec3" },
         { name: "scale", caption: "Scale", type: "vec3", default: { x: 1, y: 1, z: 1 }, slotType: "vec3" },
     ],
     sphere: [

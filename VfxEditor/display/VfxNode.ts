@@ -128,6 +128,15 @@ export class VfxNode extends gui.Widget {
                     }
                 }
             }
+            // 普通 operator 节点（非 inline / 非 supportedTypes）的内联可编辑输入也需要字段宽度
+            // （如 transformPosition 的 matrix:transform / position:vec3，对齐 Unity 节点内联编辑器）
+            if (!isInline && !hasSupportedTypes) {
+                for (const inp of this.typeDef.inputs) {
+                    if (this._isInlineEditableType(inp.type)) {
+                        maxVecW = Math.max(maxVecW, VfxNode._getMaxNestedVecWidth(inp.type));
+                    }
+                }
+            }
             if (maxVecW > 0) {
                 W = Math.max(VfxNode.NODE_WIDTH_WIDE, 42 + maxVecW + VfxNode.OUT_COL_W);
             }
@@ -206,13 +215,15 @@ export class VfxNode extends gui.Widget {
             const slotsH = Math.max(inputRows, 1 + outCompVisible);
             H = VfxNode.HEADER_HEIGHT + comboRows * VfxNode.COMBO_HEIGHT + editablePropH + slotsH * VfxNode.SLOT_HEIGHT + 16;
         } else if (hasOutCol) {
-            // getAttribute / getProperty 等有分量输出的节点
-            const inputRows = this.typeDef.inputs.length;
-            const slotsH = Math.max(inputRows, 1 + outCompVisible);
-            H = VfxNode.HEADER_HEIGHT + comboRows * VfxNode.COMBO_HEIGHT + editablePropH + slotsH * VfxNode.SLOT_HEIGHT + 16;
+            // getAttribute / getProperty / transformPosition 等有分量输出的节点
+            // 输入列高度按内联可编辑输入（复合展开）实际占用计算
+            const inputColH = this._calcOperatorInputColH();
+            const outColH = (1 + outCompVisible) * VfxNode.SLOT_HEIGHT;
+            H = VfxNode.HEADER_HEIGHT + comboRows * VfxNode.COMBO_HEIGHT + editablePropH + Math.max(inputColH, outColH) + 16;
         } else {
-            const numSlots = Math.max(this.typeDef.inputs.length, allOutputs.length);
-            H = VfxNode.HEADER_HEIGHT + comboRows * VfxNode.COMBO_HEIGHT + editablePropH + numSlots * VfxNode.SLOT_HEIGHT + 16;
+            const inputColH = this._calcOperatorInputColH();
+            const outColH = allOutputs.length * VfxNode.SLOT_HEIGHT;
+            H = VfxNode.HEADER_HEIGHT + comboRows * VfxNode.COMBO_HEIGHT + editablePropH + Math.max(inputColH, outColH) + 16;
         }
         this.setSize(W, H);
 
@@ -483,6 +494,13 @@ export class VfxNode extends gui.Widget {
             const isVecType = resolvedType && (resolvedType === "vec2" || resolvedType === "vec3" || resolvedType === "vec4");
             yOffset += 6;
             for (let slotDef of this.typeDef.inputs) {
+                // 普通 operator 节点（非 supportedTypes）的内联可编辑输入：
+                // 用 createPropRow 渲染 Unity 同款节点内联编辑器（复合类型可展开 + 自带 input slot）。
+                // createPropRow 自己创建 slot，因此走此分支时不再创建裸 slot。
+                if (!hasSupportedTypes && this._isInlineEditableType(slotDef.type)) {
+                    yOffset = this._buildOperatorInputEditor(slotDef, yOffset, W, PAD, hasOutCol);
+                    continue;
+                }
                 if (resolvedType) slotDef = { ...slotDef, type: resolvedType };
                 const slot = new VfxSlot(slotDef, true, this.nodeData.id, this._stage);
                 const ui = slot.createUI(W);
@@ -801,6 +819,88 @@ export class VfxNode extends gui.Widget {
         if (prop.type === "vec3") return 3;
         if (prop.type === "vec4") return 4;
         return 1;
+    }
+
+    /** 类型是否为节点内可内联编辑的输入（标量 / 向量 / 复合类型）。
+     *  Texture/Mesh/Gradient/Curve/GraphicsBuffer/flow 等保持裸 slot（暂不在节点内画选择器）。 */
+    private _isInlineEditableType(type: string): boolean {
+        if (type === "number" || type === "float" || type === "int" || type === "uint"
+            || type === "bool" || type === "boolean") return true;
+        // vec/color/transform/sphere/cone/... 复合类型
+        return !!getCompositeChildren(type);
+    }
+
+    /** 归一化转换器写入的 transform 数据：转换器用 `angles` 键，IDE 复合表用 `rotation`。
+     *  让 UI 显示与编译器读取一致（避免"值显示为 0 但编译用 90"的假象）。递归处理嵌套复合（sphere/cone 等）。 */
+    private _normalizeTransformInput(val: any, type: string): void {
+        if (!val || typeof val !== "object") return;
+        if (type === "transform" && val.angles != null && val.rotation == null) {
+            val.rotation = val.angles;
+        }
+        const children = getCompositeChildren(type);
+        if (children) {
+            for (const c of children) this._normalizeTransformInput(val[c.name], c.type);
+        }
+    }
+
+    /** 计算普通 operator 节点输入列的总高度（内联可编辑输入按 createPropRow 实际占用，其余按一行） */
+    private _calcOperatorInputColH(): number {
+        let h = 0;
+        for (const inp of this.typeDef.inputs) {
+            if (this._isInlineEditableType(inp.type)) {
+                h += calcPropRowHeight(
+                    { name: inp.id, caption: inp.name, type: inp.type } as IVfxPropDef,
+                    this.nodeData.props || {},
+                    (sid: string) => this._isInputSlotConnected(sid),
+                );
+            } else {
+                h += VfxNode.SLOT_HEIGHT;
+            }
+        }
+        return h;
+    }
+
+    /** 渲染普通 operator 节点的单个内联可编辑输入（复用 createPropRow，自带 input slot + 复合展开）。
+     *  返回新的 yOffset。 */
+    private _buildOperatorInputEditor(slotDef: IVfxSlotDef, yOffset: number, W: number, PAD: number, hasOutCol: boolean): number {
+        if (!this.nodeData.props) this.nodeData.props = {};
+        if (!this.nodeData.props._inputs) this.nodeData.props._inputs = {};
+        const inputs = this.nodeData.props._inputs as Record<string, any>;
+        const slotId = slotDef.id;
+        const slotDefault = (slotDef as any).default;
+        const isScalar = slotDef.type === "number" || slotDef.type === "float" || slotDef.type === "int"
+            || slotDef.type === "uint" || slotDef.type === "bool" || slotDef.type === "boolean";
+        // 仅对向量/复合类型预置默认值（保证展开时 scale=1 等正确显示且与编译一致）。
+        // 标量保持懒初始化：不写入 _inputs，让编译器的隐式默认（sampleCurve t→normalizedAge、
+        // ageOverLifetime age/lifetime 等）继续生效——一旦写入 0 会覆盖这些默认。
+        if (!isScalar && inputs[slotId] == null) {
+            inputs[slotId] = slotDefault != null
+                ? JSON.parse(JSON.stringify(slotDefault))
+                : buildTypeDefault(slotDef.type);
+        }
+        // 兼容转换器的 angles 键
+        this._normalizeTransformInput(inputs[slotId], slotDef.type);
+
+        const rowResult = createPropRow({
+            propDef: { name: slotId, caption: slotDef.name, type: slotDef.type, default: slotDefault },
+            parent: this,
+            nodeId: this.nodeData.id,
+            stage: this._stage,
+            getData: () => inputs[slotId],
+            setData: (v: any) => { inputs[slotId] = v; },
+            buildSlotId: (name: string) => name,
+            hasInputSlot: true,
+            isConnected: (sid: string) => this._isInputSlotConnected(sid),
+            onRebuild: () => { this._buildUI(); this._stage.scheduleRefreshLines(); },
+            expandState: this.nodeData.props,
+            startY: yOffset,
+            labelX: PAD,
+            inputRight: hasOutCol ? W - VfxNode.OUT_COL_W : W - PAD,
+            containerWidth: W,
+        });
+        this._inputSlots.push(...rowResult.inputSlots);
+        this._outputSlots.push(...rowResult.outputSlots);
+        return yOffset + rowResult.height;
     }
 
     /** 检查某个输入 slot 是否有连接 */
