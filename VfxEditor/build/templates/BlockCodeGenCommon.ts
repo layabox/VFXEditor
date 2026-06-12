@@ -1689,28 +1689,30 @@ export function genSetAttributeBlockCode(
             // op 驱动 MinMax random（如 getProperty(vec2MinMax) .x→A .y→B）：
             // 必须 mix(A, B, Rand)，不能拿 A 链当常量（否则全部粒子同值，随机失效）。
             // B 无链接时退化 inline b_ 值。
+            // ⚠不能用 { } 包裹 op 语句：编译器对 op 声明做跨块缓存，后续 block 复用同一 op
+            // 时只引用不再声明——声明若在花括号作用域里，复用处直接 undeclared。
+            // 变量唯一性靠 block.id 后缀保证。
             const compiledB = compiler.compileSetAttributeValue(contextId, block.id, attrType, vals, "b_value");
             const storageT = attrType === "color" ? "vec3" : attrType;
             const gt = GLSL_TYPE[storageT] || "float";
-            blockLines.push(`${indent}{`);
-            for (const s of compiled.stmts) blockLines.push(`${indent}    ${s}`);
-            blockLines.push(`${indent}    ${gt} _rndA = ${compiled.expr};`);
-            if (compiledB) for (const s of compiledB.stmts) blockLines.push(`${indent}    ${s}`);
-            blockLines.push(`${indent}    ${gt} _rndB = ${compiledB ? compiledB.expr : valueLiteral(attrType, vals, "b_")};`);
+            const vA = `_rndA_${block.id}`, vB = `_rndB_${block.id}`, vV = `_rndV_${block.id}`;
+            for (const s of compiled.stmts) blockLines.push(`${indent}${s}`);
+            blockLines.push(`${indent}${gt} ${vA} = ${compiled.expr};`);
+            if (compiledB) for (const s of compiledB.stmts) blockLines.push(`${indent}${s}`);
+            blockLines.push(`${indent}${gt} ${vB} = ${compiledB ? compiledB.expr : valueLiteral(attrType, vals, "b_")};`);
             const comps = storageT === "vec2" ? ["x", "y"]
                 : (storageT === "vec3" ? ["x", "y", "z"]
                 : (storageT === "vec4" ? ["x", "y", "z", "w"] : []));
             let mixExpr: string;
             if (random === "Uniform" || comps.length === 0) {
-                blockLines.push(`${indent}    float _rndT = Rand(${particleVar}.seed);`);
-                mixExpr = comps.length === 0 ? `mix(_rndA, _rndB, _rndT)` : `mix(_rndA, _rndB, ${gt}(_rndT))`;
+                blockLines.push(`${indent}float _rndT_${block.id} = Rand(${particleVar}.seed);`);
+                mixExpr = comps.length === 0 ? `mix(${vA}, ${vB}, _rndT_${block.id})` : `mix(${vA}, ${vB}, ${gt}(_rndT_${block.id}))`;
             } else {
                 // Per Component: 每分量独立 Rand
-                mixExpr = `${gt}(${comps.map(c => `mix(_rndA.${c}, _rndB.${c}, Rand(${particleVar}.seed))`).join(", ")})`;
+                mixExpr = `${gt}(${comps.map(c => `mix(${vA}.${c}, ${vB}.${c}, Rand(${particleVar}.seed))`).join(", ")})`;
             }
-            blockLines.push(`${indent}    ${gt} _rndV = ${mixExpr};`);
-            applyAssign("_rndV");
-            blockLines.push(`${indent}}`);
+            blockLines.push(`${indent}${gt} ${vV} = ${mixExpr};`);
+            applyAssign(vV);
         } else if (compiled) {
             // 编译器已处理空间转换
             for (const s of compiled.stmts) blockLines.push(`${indent}${s}`);

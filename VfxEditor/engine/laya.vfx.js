@@ -5180,7 +5180,9 @@
             this._asset = value;
             if (this._asset) {
                 this._asset._addReference();
-                this.initialEvent = this._asset.initialEventName;
+                // 组件上已有 initialEvent 一律保持（用户手填值不能被资产重赋/重导覆盖）；
+                // 空值经 setter 回退资产默认。重新走 setter 是为了按新资产重算 initialEventID。
+                this.initialEvent = this._initialEvent || this._asset.initialEventName;
                 const supportedCompute = Laya.LayaGL.renderEngine.getCapable(Laya.RenderCapable.ComputeShader);
                 if (supportedCompute) {
                     this.createAssetData();

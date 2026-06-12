@@ -888,6 +888,12 @@ export class VfxExprCompiler {
         }
 
         const uniformName = `u_VfxProp_${propName}`;
+        // bool property：std140 uniform 只能按 Float 声明（uniformMaps 无 Bool），
+        // 表达式端用比较还原 bool（直接赋值 float→bool 是 GLSL 编译错误）
+        if (gt === "bool") {
+            this._propertyUniforms.set(propName, "float");
+            return `(${uniformName} != 0.0)`;
+        }
         this._propertyUniforms.set(propName, gt);
         return uniformName;
     }

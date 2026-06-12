@@ -542,24 +542,12 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
                     if (!fullPath) return;
                     const json: any = await (IEditor as any).utils?.readJsonAsync?.(fullPath);
                     if (!json) return;
-                    // ⭐initialEvent 资产指纹同步：字段语义="跟随资产文件的 initialEventName"。
-                    // 隐藏标记 _initialEventAssetUuid 记录"上次同步自哪个资产"：
-                    //   - 标记≠当前资产(资产变更/首次/复制链残留) → 强制重置为资产值并记标记；
-                    //   - 标记匹配 → 用户手动改过的值保持(同资产下的有意 override，如 Buff loop)。
+                    // initialEvent：组件上已有值一律保持（用户手填的名字绝不能被重导/重转覆盖）；
+                    // 只有空值才回填资产文件的 initialEventName（读不到则 OnPlay）。
                     try {
                         const dataObj: any = this.target?.data;
-                        if (dataObj) {
-                            const assetInitial: string = json.initialEventName || json.props?.initialEventName || "OnPlay";
-                            const cur: string = dataObj.initialEvent;
-                            if (dataObj._initialEventAssetUuid !== srcKey) {
-                                if (cur !== assetInitial) {
-                                    console.log(`[VfxPropertyOverrides] initialEvent '${cur || "<空>"}' → 资产值 '${assetInitial}'（资产变更/首次同步）`);
-                                    dataObj.initialEvent = assetInitial;
-                                }
-                                dataObj._initialEventAssetUuid = srcKey;
-                            } else if (!cur) {
-                                dataObj.initialEvent = assetInitial;
-                            }
+                        if (dataObj && !dataObj.initialEvent) {
+                            dataObj.initialEvent = json.initialEventName || json.props?.initialEventName || "OnPlay";
                         }
                     } catch { }
                     if (Array.isArray(json.properties)) {

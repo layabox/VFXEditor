@@ -51,8 +51,10 @@ export function generateInitialize(shaderName: string, common: string, blocks: I
     // 隐式属性初始化代码
     const implicitLines: string[] = [];
     if (needSeed) {
+        // 用单调 spawn id（id+累计总数）而非槽位：槽位复用会让重生粒子拿到与前任完全相同的
+        // seed（随机参数逐周期重复）。Unity 的 seed 同样基于单调 particleId。
         implicitLines.push("    // Initialize random seed (stateful RNG, each Rand() call advances seed)");
-        implicitLines.push("    particle.seed = WangHash(particleIndex ^ uint(u_SystemSeed));");
+        implicitLines.push("    particle.seed = WangHash((id + uint(u_TotalSpawnedCount)) ^ uint(u_SystemSeed));");
     }
     if (hasAttr("particleId")) {
         // particleId 是粒子系统单调累计的总 ID（对齐 Unity attribute "particleId"）
@@ -314,8 +316,11 @@ export function generateGPUInitialize(
     // 隐式属性初始化代码
     const implicitLines: string[] = [];
     if (needSeed) {
-        implicitLines.push("    // Initialize random seed (use SystemSeed for uniqueness across frames)");
-        implicitLines.push("    particle.seed = WangHash(particleIndex ^ uint(u_SystemSeed));");
+        // GPU 事件没有 CPU 侧单调 spawn 计数，掺 u_TotalTime 时间盐：
+        // 槽位复用（短命中继粒子每帧死亡重生同一批槽位）会让纯槽位 seed 每帧重复，
+        // 圆周随机角等逐帧同值。
+        implicitLines.push("    // Initialize random seed (slot ^ systemSeed ^ time-salt, 防槽位复用 seed 重复)");
+        implicitLines.push("    particle.seed = WangHash(particleIndex ^ uint(u_SystemSeed) ^ floatBitsToUint(u_TotalTime));");
     }
     if (hasAttr("particleId")) {
         implicitLines.push("    particle.particleId = id;");
