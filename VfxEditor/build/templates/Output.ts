@@ -93,8 +93,10 @@ function findOrientBlock(blocks?: IVfxBlockData[]): IVfxBlockData | null {
 function orientCameraNeeds(block: IVfxBlockData | null): { pos: boolean; dir: boolean; up: boolean } {
     if (!block) return { pos: false, dir: false, up: false };
     const mode = (block.props?.mode as string) || "Face Camera Plane";
+    // Along Velocity (Y primary, Unity faceRay): axisZ = position - cameraPos, 需 u_OrientCameraPos
+    const avYPrimary = mode === "Along Velocity" && (((block.props?.axes as string) || "YX")[0] === "Y");
     return {
-        pos: mode === "Face Camera Position" || mode === "Fixed Axis",
+        pos: mode === "Face Camera Position" || mode === "Fixed Axis" || avYPrimary,
         dir: mode === "Face Camera Plane",
         // Unity Orient.cs LookAtPosition/LookAtLine: axisX = cross(GetVFXToViewRotMatrix()[1], axisZ)
         //   即用【相机 up 轴】做 twist(相机感知),而非世界 up → 面片随相机均匀朝向。需 u_OrientCameraUp。
@@ -214,11 +216,17 @@ function genOrientCode(block: IVfxBlockData, attrNames: Set<string>, indent: str
                 lines.push(`${indent}vec3 _orientY = (_cross1Len > 0.001) ? _cross1 / _cross1Len : normalize(cross(_orientX, vec3(0.0, 1.0, 0.0)));`);
                 lines.push(`${indent}vec3 _orientZ = cross(_orientX, _orientY);`);
             } else {
-                // 默认 axes="YX/YZ" (Unity 原 AlongVelocity): Y 对齐 velocity
+                // 默认 axes="YX/YZ" (Unity 原 AlongVelocity, faceRay): Y 对齐 velocity,
+                // axisZ = position - cameraPos【视线方向】（Unity 产物公式:
+                //   axisY=normalize(velocity); axisZ=position-viewPos;
+                //   axisX=SafeNormCross(axisY,axisZ,(1,0,0)); axisZ=cross(axisX,axisY)）。
+                // 用固定世界 Z 做 twist 轴会让面片不朝相机，侧视角拉伸条隐形。
                 lines.push(`${indent}vec3 _orientY = (_speed > 0.001) ? _vel / _speed : vec3(0.0, 1.0, 0.0);`);
-                lines.push(`${indent}vec3 _cross1 = cross(_orientY, vec3(0.0, 0.0, 1.0));`);
+                lines.push(`${indent}vec3 _camPosAV = transformPosition(u_InvEmitterWorldMatrix, u_OrientCameraPos);`);
+                lines.push(`${indent}vec3 _rayAV = ${pos} - _camPosAV;`);
+                lines.push(`${indent}vec3 _cross1 = cross(_orientY, _rayAV);`);
                 lines.push(`${indent}float _cross1Len = length(_cross1);`);
-                lines.push(`${indent}vec3 _orientX = (_cross1Len > 0.001) ? _cross1 / _cross1Len : normalize(cross(_orientY, vec3(1.0, 0.0, 0.0)));`);
+                lines.push(`${indent}vec3 _orientX = (_cross1Len > 0.001) ? _cross1 / _cross1Len : vec3(1.0, 0.0, 0.0);`);
                 lines.push(`${indent}vec3 _orientZ = cross(_orientX, _orientY);`);
             }
             break;
@@ -370,18 +378,19 @@ void writeRenderData(uint renderIndex, Particle p${hasOrient ? ", vec3 _orientX,
 
     vec3 finalScale = vec3(${size}) * ${scale};
 
-    // HDR color → LDR via max-channel normalize（保 chroma 防 LDR framebuffer clip 成白色）
-    // Unity gradient + intensity multiply 链产生 HDR color (e.g., teal × 5 = (1.08, 5.0, 3.2))
-    // 没 HDR pipeline 时直接写 LDR framebuffer 让所有通道 clip 到 1 → 纯白丢 chroma
-    // 修：max(rgb)>1 时除以 max 让最亮通道为 1，chroma 比例保留；max<=1 保留 LDR 原值
-    vec3 _writeColor = ${colorRGB};
-    float _maxC = max(_writeColor.r, max(_writeColor.g, _writeColor.b));
-    if (_maxC > 1.0) _writeColor /= _maxC;
+    // ⭐2026-06-11 HDR 直通：不再 max-channel 归一化（那是 LDR framebuffer 时代的 crutch——保 chroma
+    // 丢强度，让 Unity 的 HDR 红(23.97,0,0)在 additive 下永远压不过低强度橙 → Buff 爆心橙白 vs Unity
+    // 饱和红根因）。场景 enableHDR(浮点 framebuffer)下直通才是 Unity 语义；LDR 场景 clip 爆白同样是
+    // Unity 行为。仅留安全上限 64 防 Inf/NaN 污染 blend。
+    vec3 _writeColor = clamp(${colorRGB}, vec3(0.0), vec3(64.0));
 
     // ⭐ per-particle 固定随机(0..1) → render data base[4].w(a_AttrPivot.w),供 render shader 做纹理 UV 逐粒子偏移
     //    让每个粒子采样纹理不同区域(对齐 Unity _MainTextureOffset 的 Random 算子 → 雾各自独立飘动,不再一起动)。
     //    用 p.seed(每粒子固定,readParticle 从 base[2].w 读)做自包含整数 hash,不依赖 WangHash 定义顺序。
-    uint _prh = p.seed;
+    //    ⚠粒子结构按 attribute 使用收集,系统不用随机时无 seed 字段(Heal VFX1 编译炸根因)——退化用 renderIndex hash。
+${attrNames.has("seed")
+    ? `    uint _prh = p.seed;`
+    : `    uint _prh = renderIndex * 2654435761u + 1013904223u;`}
     _prh ^= _prh >> 16u; _prh *= 0x7feb352du; _prh ^= _prh >> 15u; _prh *= 0x846ca68bu; _prh ^= _prh >> 16u;
     float _particleRand = float(_prh) / 4294967295.0;
 

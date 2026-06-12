@@ -521,6 +521,7 @@ export class VfxExprCompiler {
         blockId: number,
         attrType: string,
         vals: Record<string, any>,
+        slotBase: string = "value",
     ): IExprResult | null {
         // color attribute 存储为 vec3 (RGB)，alpha 是独立属性
         const storageType = attrType === "color" ? "vec3" : attrType;
@@ -529,8 +530,9 @@ export class VfxExprCompiler {
         // Unity 行为：master 连接提供 vec3 默认值；sub-slot 连接覆盖对应通道。
         // 之前 master 全胜让 sampleTexture2D.x → color.x 这种 logo 采样链被 sampleGradient master 屏蔽 →
         // P4 Net10000 拿不到 Unity logo 的 R 通道而 全用 gradient 颜色（红→青渐变），丢失 logo 形状
+        // slotBase: "value"=A(随机下限/单值), "b_value"=B(随机上限, Unity SetAttribute Random 槽)
         const comps = _getComponents(attrType);
-        const wholeResult = this.compileBlockInput(contextId, `block_${blockId}_value`, storageType);
+        const wholeResult = this.compileBlockInput(contextId, `block_${blockId}_${slotBase}`, storageType);
 
         // 标量 attribute (float/int/uint/bool)：没 sub-slot 概念，直接走 master / fallback
         if (comps.length === 0) {
@@ -539,7 +541,7 @@ export class VfxExprCompiler {
 
         // 检查 sub-slot 是否有任何 link
         const subResults: (IExprResult | null)[] = comps.map(comp =>
-            this.compileBlockInput(contextId, `block_${blockId}_value_${comp}`, "float")
+            this.compileBlockInput(contextId, `block_${blockId}_${slotBase}_${comp}`, "float")
         );
         const anyComp = subResults.some(r => r != null);
 
@@ -552,10 +554,11 @@ export class VfxExprCompiler {
         if (wholeResult) {
             stmts.push(...wholeResult.stmts);
             const gt = glslType(storageType);
-            masterVar = `_setAttrMaster_${blockId}`;
+            masterVar = slotBase === "value" ? `_setAttrMaster_${blockId}` : `_setAttrMaster_${blockId}_b`;
             stmts.push(`${gt} ${masterVar} = ${wholeResult.expr};`);
         }
         const defaultVal = attrType === "color" ? 1 : 0;
+        const valPrefix = slotBase === "value" ? "" : "b_";
         const compExprs: string[] = [];
         for (let i = 0; i < comps.length; i++) {
             const r = subResults[i];
@@ -565,7 +568,7 @@ export class VfxExprCompiler {
             } else if (masterVar) {
                 compExprs.push(`${masterVar}.${comps[i]}`);
             } else {
-                compExprs.push(toFloat(vals[comps[i]] ?? defaultVal));
+                compExprs.push(toFloat(vals[`${valPrefix}${comps[i]}`] ?? vals[comps[i]] ?? defaultVal));
             }
         }
         const gt = glslType(storageType);

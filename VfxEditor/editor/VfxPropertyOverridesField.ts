@@ -225,8 +225,13 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
     private _addPropertyRow(p: any, overrides: { [name: string]: number[] }): void {
         try {
             const totalW = this._availWidth();
-            const enabled = overrides[p.name] !== undefined;
-            const curVal = enabled ? overrides[p.name] : this._toNumberArray(p.default, p.type);
+            // 勾选语义对齐 Unity m_Overridden：
+            //   有显式条目(数组)=勾；条目为 null=用户显式取消(覆盖 prefab 标记)；
+            //   无条目时回退资产的 prefabOverridden 标记(转换器从 Unity prefab m_PropertySheet 带出,
+            //   值已烘进 default → 勾上显示烘焙值,与 Unity 面板一致)。
+            const entry = overrides[p.name];
+            const enabled = entry !== undefined ? Array.isArray(entry) : (p.prefabOverridden === true);
+            const curVal = Array.isArray(entry) ? entry : this._toNumberArray(p.default, p.type);
             const display = p.displayName && p.displayName.length > 0 ? p.displayName : p.name;
 
             // 行容器: 不用 layout, 子节点 setPos 定位. 这里只做初始摆放, 面板缩放时由 _relayout 重新摆放(无重建).
@@ -247,10 +252,16 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             cb.setPos(0, Math.floor((rh - 18) / 2));
             cb.on("changed", () => {
                 const newOn = (cb as any).selected;
-                if (newOn && overrides[p.name] === undefined) {
+                if (newOn && !Array.isArray(overrides[p.name])) {
                     overrides[p.name] = this._toNumberArray(p.default, p.type);
-                } else if (!newOn && overrides[p.name] !== undefined) {
-                    delete overrides[p.name];
+                } else if (!newOn) {
+                    if (p.prefabOverridden === true) {
+                        // prefab 标记勾选的行：取消时写 null 占位（否则 rebuild 又按标记勾回）。
+                        // 运行时 _applyPropertyOverrides 只认数组条目，null 自然跳过。
+                        (overrides as any)[p.name] = null;
+                    } else if (overrides[p.name] !== undefined) {
+                        delete overrides[p.name];
+                    }
                 }
                 this._commit(overrides);
                 this._safeRefresh();
@@ -520,12 +531,37 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             const myKey = uuid;
             (async () => {
                 try {
-                    const assetInfo: any = await (Editor as any).assetDb?.getAsset?.(myKey);
+                    // ⭐优先读【源 .laya.vfx】（剥掉 "@N" 子资产后缀）：prefabOverridden 标记/initialEventName/
+                    // events 只在源文件里全；编译后 @0.lvfx 的 properties 不带标记（VfxBuild 不透传且需重导才更新）。
+                    // 源读不到时回退子资产（兼容手写 .lvfx 直挂的场景）。
+                    const srcKey = myKey.split("@")[0];
+                    let assetInfo: any = await (Editor as any).assetDb?.getAsset?.(srcKey);
+                    if (!assetInfo && srcKey !== myKey) assetInfo = await (Editor as any).assetDb?.getAsset?.(myKey);
                     if (!assetInfo) return;
                     const fullPath: string = (Editor as any).assetDb?.getFullPath?.(assetInfo);
                     if (!fullPath) return;
                     const json: any = await (IEditor as any).utils?.readJsonAsync?.(fullPath);
                     if (!json) return;
+                    // ⭐initialEvent 资产指纹同步：字段语义="跟随资产文件的 initialEventName"。
+                    // 隐藏标记 _initialEventAssetUuid 记录"上次同步自哪个资产"：
+                    //   - 标记≠当前资产(资产变更/首次/复制链残留) → 强制重置为资产值并记标记；
+                    //   - 标记匹配 → 用户手动改过的值保持(同资产下的有意 override，如 Buff loop)。
+                    try {
+                        const dataObj: any = this.target?.data;
+                        if (dataObj) {
+                            const assetInitial: string = json.initialEventName || json.props?.initialEventName || "OnPlay";
+                            const cur: string = dataObj.initialEvent;
+                            if (dataObj._initialEventAssetUuid !== srcKey) {
+                                if (cur !== assetInitial) {
+                                    console.log(`[VfxPropertyOverrides] initialEvent '${cur || "<空>"}' → 资产值 '${assetInitial}'（资产变更/首次同步）`);
+                                    dataObj.initialEvent = assetInitial;
+                                }
+                                dataObj._initialEventAssetUuid = srcKey;
+                            } else if (!cur) {
+                                dataObj.initialEvent = assetInitial;
+                            }
+                        }
+                    } catch { }
                     if (Array.isArray(json.properties)) {
                         this._propertiesCache = json.properties;
                         this._cachedAssetKey = myKey;

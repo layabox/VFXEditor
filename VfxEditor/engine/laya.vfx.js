@@ -1,4 +1,4 @@
-﻿(function (exports, Laya) {
+(function (exports, Laya) {
     'use strict';
 
     exports.VFXUpdateMode = void 0;
@@ -697,9 +697,9 @@
             VFXRenderer._patchedTextureUrls.add(url);
             console.log("[VFX alpha] start url=", url);
             try {
-                const buffer = await Laya.Laya.loader.load(url, Laya.Loader.BUFFER);
+                const buffer = await Laya.Laya.loader.fetch(url, "arraybuffer");
                 if (!buffer || !(buffer instanceof ArrayBuffer)) {
-                    console.warn("[VFX alpha] loader returned non-ArrayBuffer:", typeof buffer);
+                    console.warn("[VFX alpha] fetch returned non-ArrayBuffer:", typeof buffer);
                     return;
                 }
                 if (!url.toLowerCase().endsWith(".png")) {
@@ -842,10 +842,46 @@
             }
             return mat;
         }
-        static getCustomShaderMaterial(shaderName, blendMode = "Alpha", instanceKey = "") {
+        /** mesh 顶点能力 → 材质 define 同步（COLOR=slot1 / UV=slot2 / TANGENT=slot4）。
+         *  WebGPU 要求 shader 引用的顶点槽必须出现在 VertexState；mesh 缺元素时必须关掉对应 define。
+         *  材质经 matInstanceKey per-system 实例化，按各自 mesh 调整不互相污染。 */
+        static _syncMeshAttrDefines(mat, geometry) {
+            try {
+                const mesh = geometry && (geometry._mesh || geometry.mesh);
+                if (!mesh || !mat) return;
+                const vb = mesh.vertexBuffer || mesh._vertexBuffer;
+                const decl = vb && vb.vertexDeclaration;
+                const elems = decl && (decl._vertexElements || decl.vertexElements);
+                if (!elems || !elems.length) return;
+                const usages = new Set();
+                for (const e of elems) usages.add(e.elementUsage !== undefined ? e.elementUsage : e._elementUsage);
+                // 官方 mesh define 集合（MeshUtil.getMeshDefine 与 MeshRenderer 同源），加上手动 usage 双保险
+                let meshDefs = null;
+                try {
+                    if (Laya.MeshUtil && Laya.MeshUtil.getMeshDefine) {
+                        meshDefs = [];
+                        Laya.MeshUtil.getMeshDefine(mesh, meshDefs);
+                    }
+                } catch (e) { meshDefs = null; }
+                const sync = (defName, usage) => {
+                    const def = Laya.Shader3D.getDefineByName(defName);
+                    if (!def) return;
+                    const has = meshDefs ? meshDefs.indexOf(def) >= 0 : usages.has(usage);
+                    if (has || usages.has(usage)) mat.addDefine(def);
+                    else mat.removeDefine(def);
+                };
+                sync("COLOR", 1);
+                sync("UV", 2);
+                sync("UV1", 7);
+                sync("TANGENT", 4);
+            } catch (e) { }
+        }
+        static getCustomShaderMaterial(shaderName, blendMode = "Alpha", instanceKey = "", variant = "instanced") {
             var _a, _b, _c, _d, _e, _f;
             // instanceKey: per-system 材质实例(多系统共用 custom shader 时 per-system uniform 互覆盖修复)
-            const key = `${shaderName}__${blendMode}__${instanceKey}`;
+            // variant="strip": strip 几何是普通顶点流(无实例属性 a_AttrScale 等)，绝不能加 VFX_INSTANCED
+            //   否则 p.scale 读 0 → 顶点全缩到 pivot 退化不可见且零报错(Buff VFX4 UNI-Masked 丝带根因)
+            const key = `${shaderName}__${blendMode}__${instanceKey}__${variant}`;
             let mat = VFXRenderer._customShaderMaterialCache.get(key);
             if (mat)
                 return mat;
@@ -865,13 +901,22 @@
                         .then(() => console.log(`[VFX Renderer] custom shader '${shaderName}' loaded (url=${url})`))
                         .catch((err) => console.warn(`[VFX Renderer] custom shader '${shaderName}' load failed`, err));
                 }
-                return VFXRenderer.getCustomShaderMaterial("VFXUnlit", blendMode, instanceKey);
+                return VFXRenderer.getCustomShaderMaterial("VFXUnlit", blendMode, instanceKey, variant);
             }
             mat = new Laya.Material();
             mat.setShaderName(shaderName);
-            const vfxDef = Laya.Shader3D.getDefineByName("VFX_INSTANCED");
-            if (vfxDef)
-                mat.addDefine(vfxDef);
+            if (variant !== "strip") {
+                const vfxDef = Laya.Shader3D.getDefineByName("VFX_INSTANCED");
+                if (vfxDef)
+                    mat.addDefine(vfxDef);
+            }
+            else {
+                // strip 顶点流自带 a_Texcoord0，但 UV define 由 Mesh 顶点声明自动推导——strip 几何不是 Mesh，
+                // 必须显式开，否则 Vertex 结构无 texCoord0（SG 纹理采样退化 (0,0) 单点 / 注入代码编译炸）
+                const uvDef = Laya.Shader3D.getDefineByName("UV");
+                if (uvDef)
+                    mat.addDefine(uvDef);
+            }
             const colorDef = Laya.Shader3D.getDefineByName("COLOR");
             if (colorDef)
                 mat.addDefine(colorDef);
@@ -1052,10 +1097,12 @@
             const supportedCompute = Laya.LayaGL.renderEngine.getCapable(Laya.RenderCapable.ComputeShader);
             if (!supportedCompute)
                 return;
-            const shaderData = this._baseRenderNode.shaderData;
+            // ⭐不再把各 mesh 的能力 define 并集到【节点级】shaderData：
+            // 多 mesh 能力不同时（实心 mesh 有色/切线 + 内置 quad 无），节点级并集会让无色/无切线
+            // 元素的 shader 变体强制引用缺失顶点槽 → WebGPU CreateRenderPipeline 失败（Detonation 根因）。
+            // mesh define 现由 _syncMeshAttrDefines 按【系统材质实例】精确管理（onAwake 预同步+每帧幂等）。
             for (const geo of this._geometries) {
                 if (geo instanceof VFXGeometry) {
-                    addMeshDefines(geo.mesh, shaderData);
                     VFXRenderer.smoothMeshNormals(geo.mesh);
                     VFXRenderer.smoothMeshVertexColors(geo.mesh, 8, 0.5);
                 }
@@ -1107,7 +1154,7 @@
                         console.log(`[VFX Strip Debug] meshMaterial=${meshMaterial ? (_a = meshMaterial._shader) === null || _a === void 0 ? void 0 : _a.name : 'NULL'}, stripCustomShader='${stripCustomShader}'`);
                     }
                     if (stripCustomShader && stripCustomShader !== "VFXStrip") {
-                        element.material = VFXRenderer.getCustomShaderMaterial(stripCustomShader, mode);
+                        element.material = VFXRenderer.getCustomShaderMaterial(stripCustomShader, mode, geometry.matInstanceKey || "", "strip");
                     }
                     else {
                         const stripMainTex = geometry.mainTexture || "";
@@ -1146,6 +1193,10 @@
                     const isBillboardProcedural = outType === "outputBillboard" && !!bbPrim;
                     if (customShaderName) {
                         const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, mode, geometry.matInstanceKey || "");
+                        // mesh 顶点能力 → define 同步：WebGPU 严格校验 shader 引用的顶点槽必须在 VertexState 里，
+                        // mesh 缺 color/tangent 等元素时不关 define 会 CreateRenderPipeline 失败整段渲染报废
+                        // (Detonation 无顶点色/切线 mesh: "Vertex attribute slot 1/4 ... not present" 根因)
+                        VFXRenderer._syncMeshAttrDefines(mat, geometry);
                         element.material = mat;
                     }
                     else if (outType === "outputCube") {
@@ -1806,7 +1857,7 @@
 
     var VFXRenderVertexGLSL = "\n#include \"VFXRenderCommon.glsl\";\nvec3 rotateByQuat(vec3 v,vec4 q){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}VFXParticle getVFXParticle(){VFXParticle p;p.position=a_AttrPosition.xyz;p.normalizedAge=a_AttrPosition.w;p.color=a_AttrColor;p.rotation=a_AttrRotation;p.scale=a_AttrScale.xyz;p.texIndex=a_AttrScale.w;p.pivot=a_AttrPivot.xyz;return p;}VFXParticle vfxProcessVertex(inout Vertex vertex){VFXParticle p=getVFXParticle();vec3 v=vertex.positionOS-p.pivot;v=v*p.scale;v=rotateByQuat(v,p.rotation);vertex.positionOS=v+p.position;return p;}vec3 vfxWorldPosition(Vertex vertex,mat4 worldMat){vec4 pos=worldMat*vec4(vertex.positionOS,1.0);return pos.xyz/pos.w;}";
 
-    var BlueprintPixelVertexVFXGLSL = "#if !defined(BlueprintPixelVertexVFX_lib)\n#define BlueprintPixelVertexVFX_lib\n#include \"shaderBlueprint/lib/BlueprintPixel.glsl\";\n#ifdef VFX_INSTANCED\nvarying float v_TexIndex;varying float v_NormalizedAge;struct VFXParticle{vec3 position;float normalizedAge;vec4 color;vec4 rotation;vec3 scale;float texIndex;vec3 pivot;};vec3 vfxRotateByQuat(vec3 v,vec4 q){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}VFXParticle vfxGetParticle(){VFXParticle p;p.position=a_AttrPosition.xyz;p.normalizedAge=a_AttrPosition.w;p.color=a_AttrColor;p.rotation=a_AttrRotation;p.scale=a_AttrScale.xyz;p.texIndex=a_AttrScale.w;p.pivot=a_AttrPivot.xyz;return p;}VFXParticle vfxTransformVertex(inout Vertex vertex){VFXParticle p=vfxGetParticle();v_TexIndex=p.texIndex;v_NormalizedAge=p.normalizedAge;vec3 vp=vertex.positionOS-p.pivot;vp=vp*p.scale;vp=vfxRotateByQuat(vp,p.rotation);vertex.positionOS=vp+p.position;vertex.normalOS=vfxRotateByQuat(vertex.normalOS,p.rotation);\n#ifdef TANGENT\nvec3 t=vfxRotateByQuat(vertex.tangentOS.xyz,p.rotation);vertex.tangentOS=vec4(t,vertex.tangentOS.w);\n#endif\n#ifdef COLOR\nvertex.vertexColor.r*=p.color.r;vertex.vertexColor.g*=p.color.g;vertex.vertexColor.b=p.color.b;vertex.vertexColor.a*=p.color.a;\n#endif\nreturn p;}\n#endif\n#endif\n";
+    var BlueprintPixelVertexVFXGLSL = "#if !defined(BlueprintPixelVertexVFX_lib)\n#define BlueprintPixelVertexVFX_lib\n#include \"shaderBlueprint/lib/BlueprintPixel.glsl\";\nvarying float v_TexIndex;varying float v_NormalizedAge;\n#ifdef VFX_INSTANCED\nstruct VFXParticle{vec3 position;float normalizedAge;vec4 color;vec4 rotation;vec3 scale;float texIndex;vec3 pivot;};vec3 vfxRotateByQuat(vec3 v,vec4 q){vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}VFXParticle vfxGetParticle(){VFXParticle p;p.position=a_AttrPosition.xyz;p.normalizedAge=a_AttrPosition.w;p.color=a_AttrColor;p.rotation=a_AttrRotation;p.scale=a_AttrScale.xyz;p.texIndex=a_AttrScale.w;p.pivot=a_AttrPivot.xyz;return p;}VFXParticle vfxTransformVertex(inout Vertex vertex){VFXParticle p=vfxGetParticle();v_TexIndex=p.texIndex;v_NormalizedAge=p.normalizedAge;vec3 vp=vertex.positionOS-p.pivot;vp=vp*p.scale;vp=vfxRotateByQuat(vp,p.rotation);vertex.positionOS=vp+p.position;vertex.normalOS=vfxRotateByQuat(vertex.normalOS,p.rotation);\n#ifdef TANGENT\nvec3 t=vfxRotateByQuat(vertex.tangentOS.xyz,p.rotation);vertex.tangentOS=vec4(t,vertex.tangentOS.w);\n#endif\n#ifdef COLOR\nvertex.vertexColor.r*=p.color.r;vertex.vertexColor.g*=p.color.g;vertex.vertexColor.b=p.color.b;vertex.vertexColor.a*=p.color.a;\n#endif\nreturn p;}\n#endif\n#endif\n";
 
     class VFXShaderInit {
         static init() {
@@ -3351,7 +3402,12 @@
         internalInit(rand) {
         }
         internalUpdate(spawnerState) {
-            spawnerState.spawnCount += this.rate * spawnerState.deltaTime;
+            let _rate = this.rate;
+            if (this.rateProperty && this.effect && this.effect._propertyValues) {
+                const entry = this.effect._propertyValues.get(this.rateProperty);
+                if (entry && entry.value && entry.value.length > 0) _rate = entry.value[0];
+            }
+            spawnerState.spawnCount += _rate * spawnerState.deltaTime;
         }
         release() {
         }
@@ -3582,6 +3638,7 @@
                                 case exports.VFXSpawnerTaskType.ConstantRate: {
                                     const taskDesc = new VFXSpawnerConstantRateTaskDesc();
                                     taskDesc.rate = task.rate;
+                                    if (task.rateProperty) taskDesc.rateProperty = task.rateProperty;
                                     desc.tasks.push(taskDesc);
                                     break;
                                 }
@@ -4078,18 +4135,25 @@
                     const d = prop.default;
                     switch (desc.type) {
                         case exports.VFXPropertyType.Float:
-                            desc.default = [d];
+                            // ⭐默认值双形态兼容: 数字 / [n] 数组 (prefab-variant 管线写数组形态)
+                            desc.default = [Array.isArray(d) ? Number(d[0]) || 0 : Number(d) || 0];
                             break;
                         case exports.VFXPropertyType.Vec2:
-                            desc.default = [d.x, d.y];
+                            // 默认值双形态：[x,y] 数组（prefab-variant 产物）/ {x,y} 对象。
+                            // 只认一种形态会产 undefined → Vector2(NaN) → uniform NaN → 粒子隐形。
+                            desc.default = Array.isArray(d) ? [Number(d[0]) || 0, Number(d[1]) || 0] : [Number(d.x) || 0, Number(d.y) || 0];
                             break;
                         case exports.VFXPropertyType.Vec3:
-                            desc.default = [d.x, d.y, d.z];
+                            desc.default = Array.isArray(d) ? [Number(d[0]) || 0, Number(d[1]) || 0, Number(d[2]) || 0] : [Number(d.x) || 0, Number(d.y) || 0, Number(d.z) || 0];
                             break;
                         case exports.VFXPropertyType.Vec4:
-                            desc.default = [d.x, d.y, d.z, d.w];
+                            desc.default = Array.isArray(d) ? [Number(d[0]) || 0, Number(d[1]) || 0, Number(d[2]) || 0, Number(d[3]) || 0] : [Number(d.x) || 0, Number(d.y) || 0, Number(d.z) || 0, Number(d.w) || 0];
                             break;
                         case exports.VFXPropertyType.Color:
+                            if (Array.isArray(d)) {
+                                desc.default = [Number(d[0]) || 0, Number(d[1]) || 0, Number(d[2]) || 0, (d[3] != null ? Number(d[3]) : 1)];
+                                break;
+                            }
                             desc.default = [(_b = (_a = d.r) !== null && _a !== void 0 ? _a : d.x) !== null && _b !== void 0 ? _b : 1, (_d = (_c = d.g) !== null && _c !== void 0 ? _c : d.y) !== null && _d !== void 0 ? _d : 1, (_f = (_e = d.b) !== null && _e !== void 0 ? _e : d.z) !== null && _f !== void 0 ? _f : 1, (_h = (_g = d.a) !== null && _g !== void 0 ? _g : d.w) !== null && _h !== void 0 ? _h : 1];
                             break;
                         case exports.VFXPropertyType.Gradient: {
@@ -4173,50 +4237,50 @@
             return vfxAsset;
         }
     }
+    
+    const __vfxF16F32 = new Float32Array(1);
+    const __vfxF16U32 = new Uint32Array(__vfxF16F32.buffer);
+    function __vfxF32ToF16(v) {
+        __vfxF16F32[0] = v;
+        const bits = __vfxF16U32[0];
+        const sign = (bits >> 16) & 0x8000;
+        const exp = ((bits >> 23) & 0xff) - 127 + 15;
+        const frac = bits & 0x7fffff;
+        if (exp <= 0) {
+            if (exp < -10) return sign;
+            const m = (frac | 0x800000) >> (1 - exp);
+            return sign | (m >> 13);
+        }
+        if (exp >= 31) return sign | 0x7c00;
+        return sign | (exp << 10) | (frac >> 13);
+    }
+
     function bakeInlineGradientTexture(stops) {
+        // ⭐2026-06-11 HDR 直通：R16G16B16A16 半精度浮点纹理，不再 max-normalize（LDR 时代 crutch 丢强度）
         const width = 256;
-        const data = new Uint8Array(width * 4);
+        const data = new Uint16Array(width * 4);
         const rawKeys = stops.length >= 2 ? stops : [
             { t: 0, color: [1, 1, 1, 1] },
             { t: 1, color: [1, 1, 1, 0] },
         ];
-        const normalizeStop = (c) => {
-            const r = Math.max(0, c[0]);
-            const g = Math.max(0, c[1]);
-            const b = Math.max(0, c[2]);
-            const a = Math.max(0, Math.min(1, c[3]));
-            const maxRGB = Math.max(r, g, b);
-            if (maxRGB > 1) {
-                return [r / maxRGB, g / maxRGB, b / maxRGB, a];
-            }
-            return [r, g, b, a];
-        };
         const keys = rawKeys.map(k => ({
             t: k.t,
-            color: normalizeStop(k.color),
+            color: [Math.max(0, k.color[0]), Math.max(0, k.color[1]), Math.max(0, k.color[2]), Math.max(0, Math.min(1, k.color[3]))],
         }));
         for (let i = 0; i < width; i++) {
             const t = i / (width - 1);
             let a = keys[0], b = keys[keys.length - 1];
             for (let k = 0; k < keys.length - 1; k++) {
-                if (t >= keys[k].t && t <= keys[k + 1].t) {
-                    a = keys[k];
-                    b = keys[k + 1];
-                    break;
-                }
+                if (t >= keys[k].t && t <= keys[k + 1].t) { a = keys[k]; b = keys[k + 1]; break; }
             }
             const span = Math.max(b.t - a.t, 1e-6);
             const u = Math.max(0, Math.min(1, (t - a.t) / span));
-            const r = a.color[0] + (b.color[0] - a.color[0]) * u;
-            const g = a.color[1] + (b.color[1] - a.color[1]) * u;
-            const bB = a.color[2] + (b.color[2] - a.color[2]) * u;
-            const aA = a.color[3] + (b.color[3] - a.color[3]) * u;
-            data[i * 4] = Math.round(r * 255);
-            data[i * 4 + 1] = Math.round(g * 255);
-            data[i * 4 + 2] = Math.round(bB * 255);
-            data[i * 4 + 3] = Math.round(aA * 255);
+            data[i * 4]     = __vfxF32ToF16(a.color[0] + (b.color[0] - a.color[0]) * u);
+            data[i * 4 + 1] = __vfxF32ToF16(a.color[1] + (b.color[1] - a.color[1]) * u);
+            data[i * 4 + 2] = __vfxF32ToF16(a.color[2] + (b.color[2] - a.color[2]) * u);
+            data[i * 4 + 3] = __vfxF32ToF16(a.color[3] + (b.color[3] - a.color[3]) * u);
         }
-        const tex = new Laya.Texture2D(width, 1, Laya.TextureFormat.R8G8B8A8, false, false, false, false);
+        const tex = new Laya.Texture2D(width, 1, Laya.TextureFormat.R16G16B16A16, false, false, false, false);
         tex.setPixelsData(data, false, false);
         tex.wrapModeU = Laya.WrapMode.Clamp;
         tex.wrapModeV = Laya.WrapMode.Clamp;
@@ -5128,6 +5192,9 @@
             return this._initialEvent;
         }
         set initialEvent(value) {
+            // 空值回退资产默认（再退 OnPlay）：避免派发空事件名让特效静默不播
+            if (!value)
+                value = (this._asset && this._asset.initialEventName) || "OnPlay";
             this._initialEvent = value;
             this.initialEventID = Laya.Shader3D.propertyNameToID(this._initialEvent);
         }
@@ -5179,6 +5246,9 @@
                                     const constantRateDesc = taskDesc;
                                     const constantRateTask = task = new VFXSpawnerConstantRate();
                                     constantRateTask.rate = constantRateDesc.rate;
+                                    // rate 链到暴露属性时每帧从 _propertyValues 读（Inspector 改值即时生效）
+                                    constantRateTask.rateProperty = constantRateDesc.rateProperty || null;
+                                    constantRateTask.effect = this;
                                     break;
                                 }
                                 case exports.VFXSpawnerTaskType.SingleBurst: {
@@ -5412,7 +5482,8 @@
                 const customShaderName = sys.customShaderName;
                 const blendMode = sys.blendMode || "Alpha";
                 if (customShaderName) {
-                    const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, blendMode, sys.matInstanceKey || "");
+                    const _stripVariant = (sys.outputType === "outputTrail" || sys.outputType === "outputParticleStripSGQuad" || sys.outputType === "outputPoint" || sys.outputType === "outputLine" || sys.outputType === "outputLineStrip") ? "strip" : "instanced";
+                    const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, blendMode, sys.matInstanceKey || "", _stripVariant);
                     if (mat && mat.shaderData && allDatas.indexOf(mat.shaderData) === -1)
                         allDatas.push(mat.shaderData);
                 }
@@ -5437,6 +5508,16 @@
             this._applyPropertyOverrides();
         }
         _applyPropertyOverrides() {
+            // 先恢复资产默认值：被取消/删除的 override 须回到默认，不残留旧值
+            if (this.asset && this._propertyValues) {
+                for (const prop of this.asset.properties) {
+                    const entry = this._propertyValues.get(prop.name);
+                    if (entry && Array.isArray(prop.default) && Array.isArray(entry.value)) {
+                        for (let i = 0; i < entry.value.length && i < prop.default.length; i++)
+                            entry.value[i] = prop.default[i];
+                    }
+                }
+            }
             if (!this.propertyOverrides)
                 return;
             let overrides;
@@ -5494,6 +5575,7 @@
             super();
             this.randomSeed = 0;
             this.propertyOverrides = "{}";
+            this._lastAppliedOverrides = null;
             this.currentSeed = 0;
             this.rand = new Laya.Rand(0);
             this.resetSeedOnPlay = true;
@@ -5601,6 +5683,16 @@
                             console.warn("[VFX] Multi-Output: extra geometry creation failed", e);
                         }
                     }
+                }
+            }
+            // ⭐define 同步必须在首帧渲染前完成：渲染元素的 shader 实例按"首次编译时的 define 集合"缓存，
+            // 之后材质 define 变更不会触发重编译（实测失效管线被无限复用 249×/帧）。
+            // 这里在几何刚创建、任何 draw 之前，按各系统 mesh 顶点能力把材质 define 定型。
+            for (let system of this.systems) {
+                if (system instanceof VFXParticleSystem && system.geometry && system.customShaderName
+                    && !isNonMeshOutput(system.outputType)) {
+                    const _m = VFXRenderer.getCustomShaderMaterial(system.customShaderName, system.blendMode || "Alpha", system.matInstanceKey || "");
+                    VFXRenderer._syncMeshAttrDefines(_m, system.geometry);
                 }
             }
             if (hasStrip) {
@@ -5736,6 +5828,9 @@
             }
         }
         processInitialize(evt, state) {
+            // 处理时刻重新解析 initialEventID：场景反序列化先 asset 后 initialEvent，
+            // 入队时捕获的 id 是 asset 默认值，组件 Inspector 的 initialEvent override 会被吞掉
+            evt.id = this.initialEventID;
             this.processEvent(evt, state);
             this.asset.prewarmDeltaTime;
             this.asset.prewarmStepCount;
@@ -5791,7 +5886,8 @@
                 const customShaderName = sys.customShaderName;
                 const blendMode = sys.blendMode || "Alpha";
                 if (customShaderName) {
-                    const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, blendMode, sys.matInstanceKey || "");
+                    const _stripVariant = (sys.outputType === "outputTrail" || sys.outputType === "outputParticleStripSGQuad" || sys.outputType === "outputPoint" || sys.outputType === "outputLine" || sys.outputType === "outputLineStrip") ? "strip" : "instanced";
+                    const mat = VFXRenderer.getCustomShaderMaterial(customShaderName, blendMode, sys.matInstanceKey || "", _stripVariant);
                     if (mat && mat.shaderData && allDatas.indexOf(mat.shaderData) === -1)
                         allDatas.push(mat.shaderData);
                 }
@@ -5955,6 +6051,12 @@
                 if (system instanceof VFXParticleSystem) {
                     system.setCommonUniforms(state, camera);
                 }
+            }
+            // propertyOverrides 字符串身份变化检测：Inspector 改值即时生效。
+            // 注意不能用 getter/setter（与 IDE 序列化/观察器体系交互有风险），用普通字段+帧检测。
+            if (this._lastAppliedOverrides !== this.propertyOverrides) {
+                this._lastAppliedOverrides = this.propertyOverrides;
+                this._applyPropertyOverrides();
             }
             this.applyProperties();
             for (let system of this.systems) {
@@ -6290,49 +6392,31 @@
         }
     }
     function bakeGradientTexture(stops) {
+        // ⭐2026-06-11 HDR 直通：R16G16B16A16 半精度浮点纹理，不再 max-normalize（LDR 时代 crutch 丢强度）
         const width = 256;
-        const data = new Uint8Array(width * 4);
+        const data = new Uint16Array(width * 4);
         const rawKeys = stops.length >= 2 ? stops : [
             { t: 0, color: [1, 1, 1, 1] },
             { t: 1, color: [1, 1, 1, 0] },
         ];
-        const normalizeStop = (c) => {
-            const r = Math.max(0, c[0]);
-            const g = Math.max(0, c[1]);
-            const b = Math.max(0, c[2]);
-            const a = Math.max(0, Math.min(1, c[3]));
-            const maxRGB = Math.max(r, g, b);
-            if (maxRGB > 1) {
-                return [r / maxRGB, g / maxRGB, b / maxRGB, a];
-            }
-            return [r, g, b, a];
-        };
         const keys = rawKeys.map(k => ({
             t: k.t,
-            color: normalizeStop(k.color),
+            color: [Math.max(0, k.color[0]), Math.max(0, k.color[1]), Math.max(0, k.color[2]), Math.max(0, Math.min(1, k.color[3]))],
         }));
         for (let i = 0; i < width; i++) {
             const t = i / (width - 1);
             let a = keys[0], b = keys[keys.length - 1];
             for (let k = 0; k < keys.length - 1; k++) {
-                if (t >= keys[k].t && t <= keys[k + 1].t) {
-                    a = keys[k];
-                    b = keys[k + 1];
-                    break;
-                }
+                if (t >= keys[k].t && t <= keys[k + 1].t) { a = keys[k]; b = keys[k + 1]; break; }
             }
             const span = Math.max(b.t - a.t, 1e-6);
             const u = Math.max(0, Math.min(1, (t - a.t) / span));
-            const r = a.color[0] + (b.color[0] - a.color[0]) * u;
-            const g = a.color[1] + (b.color[1] - a.color[1]) * u;
-            const bB = a.color[2] + (b.color[2] - a.color[2]) * u;
-            const aA = a.color[3] + (b.color[3] - a.color[3]) * u;
-            data[i * 4] = Math.round(r * 255);
-            data[i * 4 + 1] = Math.round(g * 255);
-            data[i * 4 + 2] = Math.round(bB * 255);
-            data[i * 4 + 3] = Math.round(aA * 255);
+            data[i * 4]     = __vfxF32ToF16(a.color[0] + (b.color[0] - a.color[0]) * u);
+            data[i * 4 + 1] = __vfxF32ToF16(a.color[1] + (b.color[1] - a.color[1]) * u);
+            data[i * 4 + 2] = __vfxF32ToF16(a.color[2] + (b.color[2] - a.color[2]) * u);
+            data[i * 4 + 3] = __vfxF32ToF16(a.color[3] + (b.color[3] - a.color[3]) * u);
         }
-        const tex = new Laya.Texture2D(width, 1, Laya.TextureFormat.R8G8B8A8, false, false, false, false);
+        const tex = new Laya.Texture2D(width, 1, Laya.TextureFormat.R16G16B16A16, false, false, false, false);
         tex.setPixelsData(data, false, false);
         tex.wrapModeU = Laya.WrapMode.Clamp;
         tex.wrapModeV = Laya.WrapMode.Clamp;

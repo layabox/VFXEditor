@@ -941,37 +941,32 @@ export function genBlockCode(
             const pos = plane.position || { x: 0, y: 0, z: 0 };
             const nrm = plane.normal || { x: 0, y: 1, z: 0 };
             const drag = toFloat(vp.drag ?? 0);
-            // 3 curves as { frameData: [t,v,it,ot,iw,ow,m, ...] }; 默认 2 frame (Unity 0,1 端点 value)
-            // Simplified linear interpolation between 2 frames (radialDist 当 t, clamp [0,1])
-            const getCurveFrames = (c: any) => {
-                const fd = c?.frameData || [];
-                if (fd.length >= 14) return { v0: toFloat(fd[1]), v1: toFloat(fd[8]) };
-                return { v0: "0.0", v1: "0.0" };
-            };
-            const ch = getCurveFrames(vp.channelDistance);
-            const gv = getCurveFrames(vp.gravityDistance);
-            const vx = getCurveFrames(vp.vortexDistance);
+            // 1:1 对齐 Unity 编译产物 HLSL（UNI Vortex.vfxblock 子图）：
+            //   target = normalize(cross(relN,N))*Vortex(d) + normalize(cross(tan,N))*Gravity(d) + N*Channel(d)
+            //   · 切向/径向必须是【单位向量】，不带 d 模长（带模长会让近轴切向→0、远轴过强，轨迹形态错）
+            //   · 三条曲线按径向距离 d 采样（SampleCurve 自带域映射+clamp）
+            //   · 切向 cross 是伪向量：LHS→RHS 镜像须翻号，Unity cross(rel,N) → Laya cross(N,rel)
+            const regCurve = (c: any, ofs: number) => (compiler && c && Array.isArray(c.frameData) && c.frameData.length >= 7)
+                ? compiler.registerInlineCurve(ofs + (block.id || 0), c.frameData) : null;
+            const chCurve = regCurve(vp.channelDistance, 300000);
+            const gvCurve = regCurve(vp.gravityDistance, 400000);
+            const vxCurve = regCurve(vp.vortexDistance, 500000);
 
             lines.push("");
-            lines.push(`    // vortex — Unity VortexForceField.cs`);
+            lines.push(`    // vortex — 1:1 Unity 编译产物公式 (切向/径向单位化; 手性已翻 cross(N,rel))`);
             lines.push(`    {`);
             lines.push(`        vec3 _vxAxis = normalize(vec3(${toFloat(nrm.x)}, ${toFloat(nrm.y)}, ${toFloat(nrm.z)}));`);
             lines.push(`        vec3 _vxRel = ${particleVar}.position - vec3(${toFloat(pos.x)}, ${toFloat(pos.y)}, ${toFloat(pos.z)});`);
-            // ★恢复昨天验证可工作的版本(用户确认"上下两环都有了"): 方向向量【不归一化】(模长=d),
-            //   力随距离 d 自然衰减,避免归一化版的过度向心收缩(那是粒子聚成实心白椭圆的回归根因)
             lines.push(`        float _vxAxialLen = dot(_vxRel, _vxAxis);`);
             lines.push(`        vec3 _vxRadialVec = _vxRel - _vxAxialLen * _vxAxis;`);          // 径向向量(向外, 模长=d)
-            lines.push(`        float _vxRadialDist = length(_vxRadialVec);`);
-            lines.push(`        vec3 _vxTangentVec = cross(_vxRel, _vxAxis);`);                // 切向(模长=d)
-            lines.push(`        float _vxT = clamp(_vxRadialDist, 0.0, 1.0);`);
-            lines.push(`        float _vxVortex = mix(${vx.v0}, ${vx.v1}, _vxT);`);
-            lines.push(`        float _vxGravity = mix(${gv.v0}, ${gv.v1}, _vxT);`);
-            // ★particleIndex(非 seed): WangHash seed 经 float(p.seed) 存储丢最低位 → seed%2 恒 0 → 全部向下;
-            //   particleIndex 是 buffer 槽位 uint, single burst 下=spawn 顺序, 奇偶分上下两环
-            lines.push(`        float _vxChSign = (particleIndex % 2u == 1u) ? 1.0 : -1.0;`);
-            lines.push(`        float _vxChannel = _vxChSign * mix(${ch.v0}, ${ch.v1}, _vxT);`);
-            // 轴向 channel(上下分层) - 径向(向心: -radialVec×gravity) + 切向(旋转: tangentVec×vortex), 全不归一化
-            lines.push(`        vec3 _vxTarget = _vxAxis * _vxChannel - _vxRadialVec * _vxGravity + _vxTangentVec * _vxVortex;`);
+            lines.push(`        float _vxD = length(_vxRadialVec);`);
+            lines.push(`        vec3 _vxTanRaw = cross(_vxAxis, _vxRel);`);                     // 切向(伪向量镜像翻号后)
+            lines.push(`        vec3 _vxTan = _vxTanRaw / max(length(_vxTanRaw), 1e-8);`);      // 单位化
+            lines.push(`        vec3 _vxRadIn = -_vxRadialVec / max(_vxD, 1e-8);`);             // 单位向心
+            lines.push(`        float _vxVortex = ${vxCurve ? `SampleCurve(u_VfxBakedTex, ${vxCurve}, _vxD)` : "0.0"};`);
+            lines.push(`        float _vxGravity = ${gvCurve ? `SampleCurve(u_VfxBakedTex, ${gvCurve}, _vxD)` : "0.0"};`);
+            lines.push(`        float _vxChannel = ${chCurve ? `SampleCurve(u_VfxBakedTex, ${chCurve}, _vxD)` : "0.0"};`);
+            lines.push(`        vec3 _vxTarget = _vxTan * _vxVortex + _vxRadIn * _vxGravity + _vxAxis * _vxChannel;`);
             lines.push(`        float _vxMass = ${particleVar}.mass > 0.0 ? ${particleVar}.mass : 1.0;`);
             // Force(Mode=Relative): 速度收敛到有界 target, 不加性累积→不炸开
             lines.push(`        ${particleVar}.velocity += (_vxTarget - ${particleVar}.velocity) * min(1.0, ${drag} * u_DeltaTime / _vxMass);`);
@@ -1690,7 +1685,33 @@ export function genSetAttributeBlockCode(
     } else if (compiler && contextId != null) {
         // 尝试从 Operator 连线编译表达式
         const compiled = compiler.compileSetAttributeValue(contextId, block.id, attrType, vals);
-        if (compiled) {
+        if (compiled && random !== "Off" && attrType !== "bool") {
+            // op 驱动 MinMax random（如 getProperty(vec2MinMax) .x→A .y→B）：
+            // 必须 mix(A, B, Rand)，不能拿 A 链当常量（否则全部粒子同值，随机失效）。
+            // B 无链接时退化 inline b_ 值。
+            const compiledB = compiler.compileSetAttributeValue(contextId, block.id, attrType, vals, "b_value");
+            const storageT = attrType === "color" ? "vec3" : attrType;
+            const gt = GLSL_TYPE[storageT] || "float";
+            blockLines.push(`${indent}{`);
+            for (const s of compiled.stmts) blockLines.push(`${indent}    ${s}`);
+            blockLines.push(`${indent}    ${gt} _rndA = ${compiled.expr};`);
+            if (compiledB) for (const s of compiledB.stmts) blockLines.push(`${indent}    ${s}`);
+            blockLines.push(`${indent}    ${gt} _rndB = ${compiledB ? compiledB.expr : valueLiteral(attrType, vals, "b_")};`);
+            const comps = storageT === "vec2" ? ["x", "y"]
+                : (storageT === "vec3" ? ["x", "y", "z"]
+                : (storageT === "vec4" ? ["x", "y", "z", "w"] : []));
+            let mixExpr: string;
+            if (random === "Uniform" || comps.length === 0) {
+                blockLines.push(`${indent}    float _rndT = Rand(${particleVar}.seed);`);
+                mixExpr = comps.length === 0 ? `mix(_rndA, _rndB, _rndT)` : `mix(_rndA, _rndB, ${gt}(_rndT))`;
+            } else {
+                // Per Component: 每分量独立 Rand
+                mixExpr = `${gt}(${comps.map(c => `mix(_rndA.${c}, _rndB.${c}, Rand(${particleVar}.seed))`).join(", ")})`;
+            }
+            blockLines.push(`${indent}    ${gt} _rndV = ${mixExpr};`);
+            applyAssign("_rndV");
+            blockLines.push(`${indent}}`);
+        } else if (compiled) {
             // 编译器已处理空间转换
             for (const s of compiled.stmts) blockLines.push(`${indent}${s}`);
             applyAssign(compiled.expr);
@@ -2316,8 +2337,8 @@ function genTurbulenceCode(
         const angExpr = `vec3(${toFloat(ftAng.x)}, ${toFloat(ftAng.y)}, ${toFloat(ftAng.z)})`;
         const sclExpr = `vec3(${toFloat(ftScl.x)}, ${toFloat(ftScl.y)}, ${toFloat(ftScl.z)})`;
 
-        // Build TRS matrix and inverse
-        lines.push(`        mat4 _ftMatrix = BuildTRS(${posExpr}, ${angExpr}, ${sclExpr});`);
+        // Build TRS matrix and inverse (BuildTRS 角度参数是弧度, 同 ShapePosition 约定)
+        lines.push(`        mat4 _ftMatrix = BuildTRS(${posExpr}, radians(${angExpr}), ${sclExpr});`);
         lines.push(`        mat4 _ftInvMatrix = _inverseTRS(_ftMatrix);`);
 
         // Transform position to field space (Unity: mul(InvFieldTransform, float4(pos, 1.0)).xyz)
@@ -2711,6 +2732,9 @@ function genSetAttributeCurveCode(
         // 派生 curve id 用大偏移避开 graph 节点 id 空间（autoID 远小于 100000）。
         const _hasPerChannel = _curveAttrType === "vec3" && compiler != null
             && ((pAny.curveY && pAny.curveY.frameData) || (pAny.curveZ && pAny.curveZ.frameData));
+        // channels 掩码(X=1,Y=2,Z=4,默认 7=全部)：Unity AttributeFromCurve channels 子集
+        // 只写所选分量、不碰其他分量（整体 Overwrite 会把前序 setAttribute 的分量值抹掉）。
+        const _chMask = (typeof pAny.channels === "number") ? pAny.channels : 7;
         if (_hasPerChannel) {
             const cy = (pAny.curveY && pAny.curveY.frameData)
                 ? compiler.registerInlineCurve(100000 + block.id, pAny.curveY.frameData) : curveExpr;
@@ -2720,7 +2744,7 @@ function genSetAttributeCurveCode(
                 + `SampleCurve(u_VfxBakedTex, ${curveExpr}, _curveT), `
                 + `SampleCurve(u_VfxBakedTex, ${cy}, _curveT), `
                 + `SampleCurve(u_VfxBakedTex, ${cz}, _curveT));`);
-            applyComposition(blockLines, attrName, "_curveVal", composition, p, inner, particleVar);
+            applyCompositionWithChannels(blockLines, attrName, _curveAttrType, "_curveVal", composition, p, inner, particleVar, _chMask, block.id);
         } else {
             const _sampleExpr = `SampleCurve(u_VfxBakedTex, ${curveExpr}, _curveT)`;
             let _curveValExpr = _sampleExpr;
@@ -2732,8 +2756,8 @@ function genSetAttributeCurveCode(
                 _curveValExpr = `vec2(${_sampleExpr})`;
             }
             blockLines.push(`${inner}${GLSL_TYPE[_curveAttrType] || "float"} _curveVal = ${_curveValExpr};`);
-            // 应用到属性
-            applyComposition(blockLines, attrName, "_curveVal", composition, p, inner, particleVar);
+            // 应用到属性（channels 掩码逐通道）
+            applyCompositionWithChannels(blockLines, attrName, _curveAttrType, "_curveVal", composition, p, inner, particleVar, _chMask, block.id);
         }
     }
 

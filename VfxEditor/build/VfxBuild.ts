@@ -180,8 +180,8 @@ export class VfxBuild {
             ctxIdToSystemIdx.set(sorted[i].id, i);
         }
 
-        // 5. 编译有效 spawn 为 Spawner system
-        const systems = sorted.map(ctx => VfxBuild._compileSpawn(ctx));
+        // 5. 编译有效 spawn 为 Spawner system（operators 透传：解析 getProperty→rate 等属性驱动链）
+        const systems = sorted.map(ctx => VfxBuild._compileSpawn(ctx, graphData.operators || []));
 
         // 6. 解析 spawn 之间的 flow 连接 → onPlayInputs / onStopInputs
         for (const srcCtx of sorted) {
@@ -552,7 +552,7 @@ export class VfxBuild {
     }
 
     /** 编译 Spawn Context → Spawner system */
-    private static _compileSpawn(ctx: IVfxContextData): any {
+    private static _compileSpawn(ctx: IVfxContextData, allOperators: IVfxOperatorData[] = []): any {
         const p = ctx.props || {};
 
         // loopDuration: Infinite→[-1,-1], Constant→[v,v], Random→[min,max]
@@ -582,7 +582,7 @@ export class VfxBuild {
         const tasks: any[] = [];
         for (const block of ctx.blocks || []) {
             if (!block.enabled) continue;
-            const compiled = VfxBuild._compileBlock(block);
+            const compiled = VfxBuild._compileBlock(block, ctx.id, allOperators);
             if (compiled) tasks.push(compiled);
         }
 
@@ -1614,15 +1614,37 @@ export class VfxBuild {
         }
     }
 
+    /** 找喂到 ctx 某 block slot 的 getProperty 算子名（spawn task 属性驱动用）。无链接/非 getProperty 返回 null */
+    private static _findSpawnSlotProperty(ctxId: number, slotId: string, allOperators: IVfxOperatorData[]): string | null {
+        for (const op of allOperators) {
+            if (op.typeId !== "getProperty" || !op.output) continue;
+            for (const slot of Object.values(op.output)) {
+                for (const conn of ((slot as any).infoArr || [])) {
+                    if (conn.nodeId === ctxId && conn.slotId === slotId) {
+                        const name = String(op.props?.property || "");
+                        return name || null;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     /** 编译单个 Block → task 对象，不支持的返回 null */
-    private static _compileBlock(block: IVfxBlockData): any {
+    private static _compileBlock(block: IVfxBlockData, ctxId: number = -1, allOperators: IVfxOperatorData[] = []): any {
         const p = block.props || {};
         switch (block.typeId) {
-            case "constantRate":
-                return {
+            case "constantRate": {
+                const task: any = {
                     type: "ConstantRate",
                     rate: p.rate ?? 10,
                 };
+                // rate 链到 getProperty(暴露属性)时记录属性名，runtime 每帧从 _propertyValues 读
+                // （不能烘焙成常量，否则 Inspector 改 spawn rate 属性永远不生效）
+                const rp = VfxBuild._findSpawnSlotProperty(ctxId, `block_${block.id}_value`, allOperators);
+                if (rp) task.rateProperty = rp;
+                return task;
+            }
             case "singleBurst": {
                 let count: [number, number];
                 if (p.spawnMode === "Random") {
@@ -1676,15 +1698,19 @@ export class VfxBuild {
                     count,
                 };
             }
-            case "variableRate":
+            case "variableRate": {
                 // runtime 未实现独立的 VariableRate spawn task（只有 ConstantRate/SingleBurst/PeriodicBurst），
                 // 之前返回 type:"VariableRate" → runtime 无对应 task → 该系统一个粒子都不发射
                 // （UNI_Aura 底圈 disc A 用 variableRate 持续发射，因此整圈不显示，只剩 singleBurst 那条播一次）。
                 // variableRate 的 rate 在转换结果里是常量，与 ConstantRate 等价 → 映射到 ConstantRate 让其持续发射。
-                return {
+                const task: any = {
                     type: "ConstantRate",
                     rate: p.rate ?? 10,
                 };
+                const rp = VfxBuild._findSpawnSlotProperty(ctxId, `block_${block.id}_value`, allOperators);
+                if (rp) task.rateProperty = rp;
+                return task;
+            }
             case "spawnOverDistance":
                 return {
                     type: "SpawnOverDistance",

@@ -61,6 +61,15 @@ export const componentTypes: IEditor.FTypeDescriptor[] = [
                 default: "OnPlay",
             },
             {
+                // 隐藏标记：initialEvent 上次从哪个资产同步（资产指纹）。
+                // VfxPropertyOverridesField 用它实现"资产变更→重置为资产值 / 同资产→保留手动 override"。
+                // 必须在此声明否则序列化层丢弃该键，标记不持久 → 每次打开都重置。
+                name: "_initialEventAssetUuid",
+                type: "string",
+                default: "",
+                hidden: true,
+            } as any,
+            {
                 // VisualEffect.propertyOverrides 字段：存 JSON string（不能用 type=object，LayaPro 序列化层不识别动态 key map）。
                 // Field UI 内部 JSON.parse → object 编辑，setValue 前 JSON.stringify → string。
                 // 引擎 runtime 加载时同样 JSON.parse 还原成 object 再调 setPropertyXXX 应用。

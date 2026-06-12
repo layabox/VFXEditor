@@ -388,7 +388,9 @@ float SampleCurve(sampler2D bakedTex, vec4 curveData, float t) {
         // Orient camera: 部分模式需要 camera position / direction
         const orientBlock = (_outputCtx.blocks || []).find(b => b.typeId === "orient" && b.enabled);
         const orientMode = (orientBlock?.props?.mode as string) || "Face Camera Plane";
-        const orientNeedsCamera = !!orientBlock && (orientMode === "Face Camera Plane" || orientMode === "Face Camera Position" || orientMode === "Fixed Axis");
+        const orientNeedsCamera = !!orientBlock && (orientMode === "Face Camera Plane" || orientMode === "Face Camera Position" || orientMode === "Fixed Axis"
+            // Along Velocity (Y primary, Unity faceRay): axisZ = position - cameraPos
+            || (orientMode === "Along Velocity" && (((orientBlock.props?.axes as string) || "YX")[0] === "Y")));
         const needsCamera = initCompiler.needsCamera || updateCompiler.needsCamera || outputCompiler.needsCamera || orientNeedsCamera;
 
         // OutputUpdate pass: camera sort / frustum cull

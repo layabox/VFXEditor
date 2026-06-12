@@ -50,6 +50,11 @@ export class VfxContext extends gui.Widget {
     /** 已加载材质属性的 shaderRes（避免重复加载；变了才重读） */
     private _matPropsLoadedKey: string = "";
     private _isRebuilding: boolean = false;
+    /** 类级重建深度：任何 context 重建期间，DataWatcher 通知一律不再级联。
+     *  实例级 _isRebuilding 只能挡自己重入；createDefaultUI 回填缺失属性默认值的写入
+     *  会经 _onDataChange → stage.refreshAllLines 重建其他 context，跨 context 级联爆炸。
+     *  重建是同步的，期间发生的写入只可能来自重建自身，抑制是安全的。 */
+    private static _anyRebuildDepth: number = 0;
     private _isSelected: boolean = false;
     /** bg 矩形在 widget 内的起始 Y */
     private _bgY: number = 0;
@@ -177,10 +182,12 @@ export class VfxContext extends gui.Widget {
     rebuildBlocks(startY?: number): void {
         if (this._isRebuilding) return;
         this._isRebuilding = true;
+        VfxContext._anyRebuildDepth++;
         try {
         this._rebuildBlocksInner(startY);
         } finally {
             this._isRebuilding = false;
+            VfxContext._anyRebuildDepth--;
         }
     }
 
@@ -798,6 +805,8 @@ export class VfxContext extends gui.Widget {
     // ---- DataWatcher ----
 
     private _onDataChange(sender: any, target: any, key: string): void {
+        // 重建期间的数据写入（默认值回填等）不再级联触发重建，防跨 context 互相引爆
+        if (VfxContext._anyRebuildDepth > 0) return;
         if (target === this.contextData.uiData && (key === "x" || key === "y")) {
             if (key === "x") super.x = Math.floor(this.contextData.uiData.x);
             else super.y = Math.floor(this.contextData.uiData.y);
