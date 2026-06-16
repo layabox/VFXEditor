@@ -43,6 +43,11 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
     // 本次构建累计的内容高度(用于撑高 box, 见 _setBoxHeight)
     private _builtHeight: number = 0;
 
+    // "本字段自身 commit 触发的回声刷新"标志：commit 写 propertyOverrides → DataInspector 下一帧回调 refresh()，
+    // 那次刷新只是我们自己编辑的回声(数据与 widget 都已是最新值)，若走全量 _rebuild 会把【正在拖动的滑条 widget】
+    // 销毁重建 → 滑条拖不动。故跳过这次 echo；外部来源(切换对象/undo/换 asset)的 refresh 仍照常重建。
+    private _selfCommitEcho: boolean = false;
+
     create(): IEditor.IPropertyFieldCreateResult {
         const box = new gui.Box();
         try {
@@ -109,6 +114,12 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
     }
 
     refresh(): void {
+        // 跳过自身 commit 的回声刷新(见 _selfCommitEcho 注释)：滑条拖动期间每帧 commit 都会触发一次 refresh，
+        // 若每次重建会销毁正在拖的 widget。这次刷新 widget 已是最新值，无需重建。
+        if (this._selfCommitEcho) {
+            this._selfCommitEcho = false;
+            return;
+        }
         this._safeRefresh();
     }
 
@@ -230,7 +241,8 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             //   无条目时回退资产的 prefabOverridden 标记(转换器从 Unity prefab m_PropertySheet 带出,
             //   值已烘进 default → 勾上显示烘焙值,与 Unity 面板一致)。
             const entry = overrides[p.name];
-            const enabled = entry !== undefined ? Array.isArray(entry) : (p.prefabOverridden === true);
+            // 勾选 = 有非 null 条目(数组/对象/字符串都算)；null = 用户显式取消；无条目回退 prefabOverridden 标记
+            const enabled = entry !== undefined ? (entry !== null) : (p.prefabOverridden === true);
             const curVal = Array.isArray(entry) ? entry : this._toNumberArray(p.default, p.type);
             const display = p.displayName && p.displayName.length > 0 ? p.displayName : p.name;
 
@@ -252,8 +264,12 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             cb.setPos(0, Math.floor((rh - 18) / 2));
             cb.on("changed", () => {
                 const newOn = (cb as any).selected;
-                if (newOn && !Array.isArray(overrides[p.name])) {
-                    overrides[p.name] = this._toNumberArray(p.default, p.type);
+                if (newOn) {
+                    const cur = overrides[p.name];
+                    if (cur === undefined || cur === null) {
+                        // 勾上 → 写入该类型的默认 override 值(数值=number[]/gradient={stops}/texture=res://uuid)
+                        overrides[p.name] = this._defaultOverrideValue(p);
+                    }
                 } else if (!newOn) {
                     if (p.prefabOverridden === true) {
                         // prefab 标记勾选的行：取消时写 null 占位（否则 rebuild 又按标记勾回）。
@@ -283,7 +299,9 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             const t = String(p.type).toLowerCase();
             let editor: any = null, editorY = 1, editorH = rh - 2;
             if (t === "float" || t === "number" || t === "int") {
-                editor = this._addNumericEditor(row, p.name, curVal, overrides, enabled, editorX, editorW, rh, t === "int");
+                // Unity m_ValueFilter:1 → 转换器写入 p.range=[min,max]：有区间则用 slider(对齐 Unity Inspector)
+                const range = (Array.isArray(p.range) && p.range.length === 2) ? p.range : null;
+                editor = this._addNumericEditor(row, p.name, curVal, overrides, enabled, editorX, editorW, rh, t === "int", range);
                 editorY = 1; editorH = rh - 2;
             } else if (t === "vec2" || t === "vec3" || t === "vec4") {
                 const dim = t === "vec2" ? 2 : (t === "vec3" ? 3 : 4);
@@ -292,9 +310,16 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             } else if (t === "color") {
                 editor = this._addColorEditor(row, p.name, curVal, overrides, enabled, editorX, editorW, rh);
                 editorY = 1; editorH = rh - 2;
+            } else if (t === "gradient") {
+                editor = this._addGradientEditor(row, p, overrides, enabled, editorX, editorW, rh);
+                editorY = 1; editorH = rh - 2;
+            } else if (t === "texture2d") {
+                editor = this._addTextureEditor(row, p, overrides, enabled, editorX, editorW, rh);
+                editorY = 1; editorH = rh - 2;
             } else {
+                // 仍不支持的类型(Mesh/Texture3D/Cube...)显示只读说明
                 const note = new gui.TextField();
-                note.text = t === "gradient" ? "(gradient: 暂只读)" : `(${p.type}: 暂不支持)`;
+                note.text = `(${p.type}: 暂不支持)`;
                 note.color = 0x888888;
                 note.wrap = false;
                 try { note.style.fontSize = 11; } catch { }
@@ -312,22 +337,45 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
         }
     }
 
-    /** Float 编辑控件：单个 NumericInput. 返回 widget 供 _relayout 重新摆放 */
+    /** Float/Int 编辑控件：无 range 用单个 NumericInput；有 range(Unity m_ValueFilter:1)用 NumericInputWithSlider
+     *  (滑条+数字框组合，跟 IDE 标准 NumberField 一致)。返回 widget 供 _relayout 重新摆放 */
     private _addNumericEditor(
         row: gui.Box, propName: string, values: number[],
         overrides: { [name: string]: number[] }, enabled: boolean,
         x: number, width: number, rh: number, intMode: boolean,
+        range: number[] | null = null,
     ): any {
         const localVals: number[] = [Number(values?.[0] ?? 0)];
-        const input: any = gui.UIPackage.createWidgetSync("~/ui/basic/Input/NumericInput.widget");
+        // 区间有效且跨度 ≤360 才用 slider（对齐标准 NumberField 阈值；超大区间滑条精度无意义，退回纯输入框）
+        const useSlider = !!range && isFinite(range[0]) && isFinite(range[1])
+            && range[1] > range[0] && (range[1] - range[0]) <= 360;
+        let input: any;
+        try {
+            input = gui.UIPackage.createWidgetSync(useSlider
+                ? "~/ui/basic/Input/NumericInputWithSlider.widget"
+                : "~/ui/basic/Input/NumericInput.widget");
+        } catch {
+            input = gui.UIPackage.createWidgetSync("~/ui/basic/Input/NumericInput.widget");
+        }
         try {
             if (intMode) input.step = 1;
+            if (useSlider) {
+                // 先设 min/max 后设 value：min/max 的 setter 会把 slider.value 同步到 input 当前值
+                input.min = range![0];
+                input.max = range![1];
+                // 小数位对齐 Unity 滑条：int 0 位、float 1 位（避免 70.035 这种长尾）。
+                // fractionDigits 同时决定 slider.wholeNumbers(==0 时整数步进)。
+                try { input.fractionDigits = intMode ? 0 : 1; } catch { }
+            }
             input.value = localVals[0];
-            input.touchable = enabled;
+            // slider 组合控件用 editable 关闭交互(同时禁 slider 与输入框)；纯输入框用 touchable
+            if (useSlider) { try { input.editable = enabled; } catch { } }
+            else { input.touchable = enabled; }
             input.alpha = enabled ? 1.0 : 0.4;
         } catch { }
         input.setSize(width, rh - 2);
         input.setPos(x, 1);
+        // 拖动滑条 / 输入框提交都会 emit "submit" → 实时写回 override(对齐 Unity 拖动即生效)
         input.on("submit", () => {
             if (!enabled) return;
             localVals[0] = Number(input.value);
@@ -415,6 +463,177 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             console.warn("[VfxPropertyOverrides] ColorInput fallback to NumericInput:", e);
             return this._addNumericEditor(row, propName, values, overrides, enabled, x, width, rh, false);
         }
+    }
+
+    /** 勾选某属性时写入的默认 override 值，按类型给出正确形态：
+     *  数值=number[]（_toNumberArray）/ Gradient={stops:[...]}（深拷资产默认）/ Texture2D="res://uuid" 字符串 */
+    private _defaultOverrideValue(p: any): any {
+        const t = String(p.type).toLowerCase();
+        if (t === "gradient") {
+            const stops = (p.default && Array.isArray(p.default.stops)) ? p.default.stops : [];
+            try { return { stops: JSON.parse(JSON.stringify(stops)) }; } catch { return { stops: [] }; }
+        }
+        if (t === "texture2d") {
+            const d = p.default;
+            const url = Array.isArray(d) ? d[0] : (typeof d === "string" ? d : "");
+            return url || "";
+        }
+        return this._toNumberArray(p.default, p.type);
+    }
+
+    /** Texture2D 编辑控件：ResourceInput 资源选择器（限 Image 类型）。override 存 "res://uuid" 字符串。 */
+    private _addTextureEditor(
+        row: gui.Box, p: any, overrides: any, enabled: boolean,
+        x: number, width: number, rh: number,
+    ): any {
+        let input: any = null;
+        try { input = gui.UIPackage.createWidgetSync("~/ui/basic/Input/ResourceInput.widget"); }
+        catch (e) { console.warn("[VfxPropertyOverrides] ResourceInput unavailable:", e); }
+        if (!input) {
+            const note = new gui.TextField();
+            note.text = "(Texture2D)"; note.color = 0x888888; note.wrap = false;
+            note.setSize(width, rh); note.setPos(x, 0); row.addChild(note);
+            return note;
+        }
+        try { input.typeFilter = ["Image"]; } catch { }
+        // 当前值：override(res://uuid) 优先，否则资产默认 default[0]
+        const cur = overrides[p.name];
+        let url = (typeof cur === "string" && cur)
+            ? cur
+            : (Array.isArray(p.default) ? p.default[0] : (typeof p.default === "string" ? p.default : ""));
+        const uuid = (typeof url === "string") ? url.replace(/^res:\/\//, "") : "";
+        try { input.text = uuid; } catch { }
+        try { input.editable = enabled; input.grayed = !enabled; } catch { }
+        try { input.alpha = enabled ? 1.0 : 0.5; } catch { }
+        input.setSize(width, rh - 2);
+        input.setPos(x, 1);
+        input.on("submit", () => {
+            if (!enabled) return;
+            try {
+                const asset = (input as any).assetValue;
+                if (asset && asset.id) overrides[p.name] = "res://" + asset.id;
+                else if (typeof url === "string" && url) overrides[p.name] = url;   // 清空时回退默认 url，保持有效
+                this._commit(overrides);
+            } catch (e) { console.warn("[VfxPropertyOverrides] texture submit err", e); }
+        }, this);
+        row.addChild(input);
+        return input;
+    }
+
+    /** Gradient 编辑控件：复用 IDE GradientInput.widget（点击弹 GradientEditDialog 编辑）。override 存 {stops:[{t,color:{r,g,b,a}}]}。
+     *  ⚠ HDR 限制：IDE 颜色选择器是 LDR(0-1)，编辑某 stop 会把它 clamp 到 [0,1]；未触碰的 stop 保留原 HDR 值。 */
+    private _addGradientEditor(
+        row: gui.Box, p: any, overrides: any, enabled: boolean,
+        x: number, width: number, rh: number,
+    ): any {
+        let input: any = null;
+        try { input = gui.UIPackage.createWidgetSync("~/ui/basic/ColorPicker/GradientInput.widget"); }
+        catch (e) { console.warn("[VfxPropertyOverrides] GradientInput unavailable:", e); }
+        if (!input) {
+            const note = new gui.TextField();
+            note.text = "(gradient)"; note.color = 0x888888; note.wrap = false;
+            note.setSize(width, rh); note.setPos(x, 0); row.addChild(note);
+            return note;
+        }
+        // 当前 stops：override({stops}) 优先，否则资产默认
+        const cur = overrides[p.name];
+        const stops = (cur && typeof cur === "object" && Array.isArray(cur.stops))
+            ? cur.stops
+            : ((p.default && Array.isArray(p.default.stops)) ? p.default.stops : []);
+        try {
+            const gv = (input as any).value;   // GradientInput 内部已 new GradientValue()，直接复用其实例
+            if (gv && typeof gv.fromData === "function") {
+                gv.fromData(this._stopsToLayaGradient(stops));
+                (input as any).value = gv;     // 触发 setter 刷新渐变条显示
+            }
+        } catch (e) { console.warn("[VfxPropertyOverrides] gradient set value err", e); }
+        try { (input as any).checkable = false; } catch { }
+        try { input.touchable = enabled; input.alpha = enabled ? 1.0 : 0.5; } catch { }
+        input.setSize(width, rh - 2);
+        input.setPos(x, 1);
+        input.on("submit", () => {
+            if (!enabled) return;
+            try {
+                const gv = (input as any).value;
+                if (gv && typeof gv.toData === "function") {
+                    overrides[p.name] = { stops: this._layaGradientToStops(gv.toData()) };
+                    this._commit(overrides);
+                }
+            } catch (e) { console.warn("[VfxPropertyOverrides] gradient submit err", e); }
+        }, this);
+        row.addChild(input);
+        return input;
+    }
+
+    /** 我方 stops [{t,color:{r,g,b,a}}] → Laya GradientValue 数据(RGB/alpha 键分离)。
+     *  ⚠ HDR 显示归一化：gui.Color.getStyleString 在 a==1 时走 toString() 转 hex，分量 >1(HDR)会
+     *  让 round(c*255) 超出 0xFF → hex 串畸形 → 渐变条颜色错乱(青被显示成橄榄)。故按最大分量归一化到
+     *  [0,1] 保留色相(对齐 Unity HDR 渐变条只显示色相)。仅影响【显示】，override/运行时仍是原始 HDR stops。 */
+    private _stopsToLayaGradient(stops: any[]): any {
+        const src = (Array.isArray(stops) && stops.length)
+            ? stops
+            : [{ t: 0, color: { r: 1, g: 1, b: 1, a: 1 } }, { t: 1, color: { r: 1, g: 1, b: 1, a: 1 } }];
+        const rgb: number[] = [];
+        const alpha: number[] = [];
+        for (const k of src) {
+            const c = k.color || {};
+            let r = Number(Array.isArray(c) ? c[0] : c.r) || 0;
+            let g = Number(Array.isArray(c) ? c[1] : c.g) || 0;
+            let b = Number(Array.isArray(c) ? c[2] : c.b) || 0;
+            const a = Array.isArray(c) ? c[3] : c.a;
+            const m = Math.max(r, g, b, 1);   // HDR(max>1)按最大分量归一化保留色相；LDR(max≤1)不变
+            if (m > 1) { r /= m; g /= m; b /= m; }
+            const t = Number(k.t) || 0;
+            rgb.push(t, r, g, b);
+            alpha.push(t, (a != null ? Number(a) : 1));
+        }
+        return {
+            _mode: 0,
+            _colorRGBKeysCount: src.length, _rgbElements: rgb,
+            _colorAlphaKeysCount: src.length, _alphaElements: alpha,
+        };
+    }
+
+    /** Laya GradientValue 数据 → 我方 stops。RGB/alpha 键位置可能不同，取并集逐点采样合并。 */
+    private _layaGradientToStops(data: any): any[] {
+        const rgbArr = data._rgbElements || [];
+        const alphaArr = data._alphaElements || [];
+        const rgbN = data._colorRGBKeysCount || 0;
+        const alphaN = data._colorAlphaKeysCount || 0;
+        const rgbKeys: any[] = [];
+        for (let i = 0; i < rgbN; i++) rgbKeys.push({ t: rgbArr[i * 4], r: rgbArr[i * 4 + 1], g: rgbArr[i * 4 + 2], b: rgbArr[i * 4 + 3] });
+        const alphaKeys: any[] = [];
+        for (let i = 0; i < alphaN; i++) alphaKeys.push({ t: alphaArr[i * 2], a: alphaArr[i * 2 + 1] });
+        if (!rgbKeys.length) rgbKeys.push({ t: 0, r: 1, g: 1, b: 1 });
+        if (!alphaKeys.length) alphaKeys.push({ t: 0, a: 1 });
+        const posSet = new Set<number>();
+        for (const k of rgbKeys) posSet.add(k.t);
+        for (const k of alphaKeys) posSet.add(k.t);
+        const positions = Array.from(posSet).sort((a, b) => a - b);
+        return positions.map(t => {
+            const rgb = this._sampleKeys(rgbKeys, t, ["r", "g", "b"]);
+            const a = this._sampleKeys(alphaKeys, t, ["a"]).a;
+            return { t, color: { r: rgb.r, g: rgb.g, b: rgb.b, a } };
+        });
+    }
+
+    /** 在键数组上对 t 做分段线性采样(各 field 独立)。keys 须按 t 升序，元素含 .t 及各 field。 */
+    private _sampleKeys(keys: any[], t: number, fields: string[]): any {
+        const out: any = {};
+        if (!keys.length) { for (const f of fields) out[f] = 0; return out; }
+        if (t <= keys[0].t) { for (const f of fields) out[f] = keys[0][f]; return out; }
+        const last = keys[keys.length - 1];
+        if (t >= last.t) { for (const f of fields) out[f] = last[f]; return out; }
+        for (let i = 0; i < keys.length - 1; i++) {
+            const a = keys[i], b = keys[i + 1];
+            if (t >= a.t && t <= b.t) {
+                const u = (t - a.t) / Math.max(b.t - a.t, 1e-6);
+                for (const f of fields) out[f] = a[f] + (b[f] - a[f]) * u;
+                return out;
+            }
+        }
+        for (const f of fields) out[f] = last[f];
+        return out;
     }
 
     /** 创建 checkbox widget（清空 default "text" 字段避免跟 label 文字重叠） */
@@ -608,8 +827,11 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
     private _commit(overrides: { [name: string]: number[] }): void {
         try {
             const json = JSON.stringify(overrides || {});
+            // 预告：本次 setValue 会让 DataInspector 下一帧回调 refresh()，那次跳过重建(见 _selfCommitEcho)
+            this._selfCommitEcho = true;
             this.target?.setValue(json);
         } catch (e) {
+            this._selfCommitEcho = false;
             console.warn("[VfxPropertyOverrides] commit failed:", e);
         }
     }

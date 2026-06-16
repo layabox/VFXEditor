@@ -48,6 +48,18 @@ export class VfxStage extends gui.Widget {
     /** refreshAllLines 防抖定时器 */
     private _refreshLinesTimer: any = null;
 
+    /** 字段值提交进行中的深度计数。>0 时 VfxContext._onDataChange 跳过整块 rebuildBlocks，
+     *  避免纯值编辑触发整 context 拆建重绘(背景 Shape 重建延迟一帧 → 一帧撕裂闪烁)。
+     *  DataWatcher 是同步通知，故同步深度计数可靠。结构性变更走显式 onRebuild；外部变更(undo/redo)无此标志照常重建。 */
+    _fieldEditDepth: number = 0;
+
+    /** 包裹"字段值提交"的数据写入：期间的 DataWatcher 通知不触发整块重建。 */
+    runFieldEdit(fn: () => void): void {
+        this._fieldEditDepth++;
+        try { fn(); }
+        finally { this._fieldEditDepth--; }
+    }
+
     private _panStartXY: { x: number; y: number } | null = null;
     private _panMoved: boolean = false;
     private _boxSelectStart: { x: number; y: number; lx: number; ly: number } | null = null;

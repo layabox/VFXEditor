@@ -317,7 +317,8 @@ export class VfxBlock {
                         nodeId: this._parentContextId,
                         stage: this._stage,
                         getData: () => this.blockData.props![propName],
-                        setData: (v: any) => { this.blockData.props![propName] = v; },
+                        // 包 runFieldEdit：纯值编辑不触发整 context 重建(防一帧撕裂闪烁)。结构性变更另由 onRebuild 显式重建。
+                        setData: (v: any) => { this._stage.runFieldEdit(() => { this.blockData.props![propName] = v; }); },
                         buildSlotId: (name: string) => buildBlockSlotId(this.blockData.id, name),
                         hasInputSlot: true,
                         showSpaceToggle: true,

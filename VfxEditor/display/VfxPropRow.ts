@@ -448,7 +448,9 @@ function _createBooleanRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
         cb.setPos(cfg.inputRight - 30, startY + 2);
         cb.setSize(20, 20);
         parent.addChild(cb);
-        cb.on("changed", () => { cfg.setData(cb.selected); });
+        // bool 值可能驱动其它行的 hidden 条件(如 useAlphaClipping)→ 显式 onRebuild 刷新可见性。
+        // (纯标量输入不调 onRebuild，靠 runFieldEdit 守卫避免整块重建闪烁；bool 是结构性变更，单次重建可接受)
+        cb.on("changed", () => { cfg.setData(cb.selected); cfg.onRebuild?.(); });
     }
 
     return result;

@@ -244,7 +244,8 @@ export class VfxContext extends gui.Widget {
                     nodeId: this.contextData.id,
                     stage: this._stage,
                     getData: () => this.contextData.props![propName],
-                    setData: (v: any) => { this.contextData.props![propName] = v; },
+                    // 包 runFieldEdit：纯值编辑不触发整 context 重建(防一帧撕裂闪烁)。结构性变更另由 onRebuild 显式重建。
+                    setData: (v: any) => { this._stage.runFieldEdit(() => { this.contextData.props![propName] = v; }); },
                     buildSlotId: (name: string) => name,
                     onRebuild: () => { this.rebuildBlocks(); this._stage.refreshAllLines(); },
                     expandState: this.contextData.props!,
@@ -807,6 +808,10 @@ export class VfxContext extends gui.Widget {
     private _onDataChange(sender: any, target: any, key: string): void {
         // 重建期间的数据写入（默认值回填等）不再级联触发重建，防跨 context 互相引爆
         if (VfxContext._anyRebuildDepth > 0) return;
+        // 字段值提交(runFieldEdit)引发的同步通知：值已显示在控件里，跳过整块 rebuildBlocks
+        // 避免拆建重绘——背景 Shape 重建延迟一帧 → 一帧撕裂闪烁(文字在、背景没)。
+        // 结构性变更(下拉切 attribute/展开折叠/mask)由显式 onRebuild 重建；外部变更(undo/redo)无此标志照常重建刷新。
+        if (this._stage && this._stage._fieldEditDepth > 0) return;
         if (target === this.contextData.uiData && (key === "x" || key === "y")) {
             if (key === "x") super.x = Math.floor(this.contextData.uiData.x);
             else super.y = Math.floor(this.contextData.uiData.y);
