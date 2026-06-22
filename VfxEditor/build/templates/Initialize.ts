@@ -72,11 +72,15 @@ export function generateInitialize(shaderName: string, common: string, blocks: I
         // 因为 setPositionShape Custom + perStripRand 用 particle.stripIndex 作 hash seed，
         // 不写它会让所有 strip 用 stripIndex=0 hash 让所有粒子塌缩到圆周同一点
         implicitLines.push("    particle.stripIndex = stripIdx;");
-        // particleIndexInStrip = ring buffer 内 absolute slot (对齐 Unity).
-        // relativeIndex (atomicAdd 旧值) 在 updateStrips reset slot1 后跨 burst 会拿重复值,
-        // 让 stripRatio = particleIndexInStrip/(ppsc-1) 在 ring buffer 内不单调 → ribbon 三角块.
-        // 用 (ringFirst + relIdx) % ppsc = 粒子的真实 ring 槽位, 跨 ring 滚动稳定.
-        implicitLines.push("    particle.particleIndexInStrip = (ringFirst + relativeIndex) % ppsc;");
+        // particleIndexInStrip = relativeIndex(本 strip 内 claim 顺序 0..ppsc-1),严格对齐 Unity。
+        // Unity VFXParticleStripCommon.hlsl: particleIndexInStrip = GetRelativeIndex(slot)
+        //   = (cap + slot - firstIndex)%cap，init 时恰 = relativeIndex；且 = 渲染走线序(OutputStrip 的 tid)。
+        // 用户算子(如 Gateway Bronze VFX10 的 bezier: t = particleIndexInStrip/15)按它定位粒子，
+        //   relativeIndex 跨 ring 滚动仍与渲染序一致 → 平滑弧。
+        // ⛔ 不能用存储槽 (ringFirst+relIdx)%ppsc：strip 复用使 firstIndex≠0 时 slot≠relativeIndex →
+        //   bezier 位置按 slot 排、渲染按 tid 连 → 乱序跨屏线(VFX10 乱线根因)。
+        //   (stripRatio 已改用渲染 tid，不再读此属性，故不会回归 ribbon 三角块。)
+        implicitLines.push("    particle.particleIndexInStrip = relativeIndex;");
     }
     const implicitCode = implicitLines.length > 0 ? "\n" + implicitLines.join("\n") + "\n" : "";
 
@@ -342,11 +346,10 @@ export function generateGPUInitialize(
     if (hasAttr("stripIndex")) {
         implicitLines.push(`    particle.stripIndex = (${stripHeadIdExpr}) % uint(u_StripCapacity);`);
     }
-    // particleIndexInStrip: ring buffer 内 absolute slot, trail 渲染按它排序构造 ribbon.
-    // 不写时 GPU init 留 0 → 同 strip 内所有粒子 stripRatio 都 0 → ribbon 顺序乱（三角块/锯齿）.
-    // 与 stripIndex 同样必须由 GPU init 写, CPU 路径在 line 68 已有同样赋值.
+    // particleIndexInStrip = relativeIndex(claim 顺序),严格对齐 Unity GetRelativeIndex(详见上方 CPU 路径注释)。
+    // 与 stripIndex 同样必须由 GPU init 写。
     if (hasAttr("particleIndexInStrip")) {
-        implicitLines.push("    particle.particleIndexInStrip = (ringFirst + relativeIndex) % ppsc;");
+        implicitLines.push("    particle.particleIndexInStrip = relativeIndex;");
     }
     const implicitCode = implicitLines.length > 0 ? "\n" + implicitLines.join("\n") + "\n" : "";
 

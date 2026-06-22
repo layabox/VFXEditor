@@ -1080,8 +1080,17 @@ export class VfxExprCompiler {
         if (op.typeId === "curlNoise") {
             return `(Generate${noiseType}CurlNoise(${coord}, ${freq}, ${octaves}, ${roughness}, ${lacunarity}) * ${amplitude})`;
         }
-        // noise: returns vec4(value, derivatives) — we store full vec4, output swizzle handles .x / .yzw
-        return `(Generate${noiseType}Noise(${coord}, ${freq}, ${octaves}, ${roughness}, ${lacunarity}) * ${amplitude})`;
+        // noise: returns vec4(value, derivatives) — output swizzle 取 .x(value) / .yzw(derivatives)
+        const _nexpr = `Generate${noiseType}Noise(${coord}, ${freq}, ${octaves}, ${roughness}, ${lacunarity})`;
+        // 对齐 Unity Noise.cs: 用 range(vec2) 缩放 —— value=Fit(n.x,[rawMin,1],range), derivatives*=(range.y-range.x)。
+        // 转换器把 Unity noise 的 range 写进 _inputs.range；旧逻辑只乘 amplitude(默认1)忽略 range → 噪声/导数放大~500倍
+        // → trail 位移漂移过大甩飞粒子(Gateway Bronze VFX10 乱线)。range 存在则走 Unity 缩放，否则回退 amplitude。
+        if (op.props?._inputs && op.props._inputs.range != null) {
+            const range = this._resolveInput(op, def, "range", "vec2");
+            const rawMin = (noiseType === "Perlin") ? "-1.0" : "0.0";
+            return `_applyNoiseRange(${_nexpr}, ${range}, ${rawMin})`;
+        }
+        return `(${_nexpr} * ${amplitude})`;
     }
 
     /** Compare 运算符 — 需要读取 settings 中的比较方式 */

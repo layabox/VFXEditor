@@ -367,7 +367,7 @@ function genTorusCore(center: string, majorR: string, minorR: string, arc: strin
 /** Circle (fallback): reads from arcCircle composite { circle: { transform, radius }, arc } — XY plane
  *  应用 transform.angles/scale 到 _shapePos 和 _shapeDir，对齐 Unity arc circle transform 行为
  *  (例如 angles=(90,0,0) 让圆面绕 X 轴翻 90 度变成 XZ 水平平面) */
-const genCircleFallback = (p: Record<string, any>, pVar: string, indent: string, mode: string, thickness: string = "0.1", spawn?: SpawnOpts) => {
+const genCircleFallback = (p: Record<string, any>, pVar: string, indent: string, mode: string, thickness: string = "0.1", spawn?: SpawnOpts, radiusOverride?: string) => {
     const ac = (p.arcCircle as Record<string, any>) || {};
     const cr = (ac.circle as Record<string, any>) || {};
     const tf = (cr.transform as Record<string, any>) || {};
@@ -377,7 +377,8 @@ const genCircleFallback = (p: Record<string, any>, pVar: string, indent: string,
     const px = toFloat(tfPos.x, 0), py = toFloat(tfPos.y, 0), pz = toFloat(tfPos.z, 0);
     const ax = toFloat(tfAng.x, 0), ay = toFloat(tfAng.y, 0), az = toFloat(tfAng.z, 0);
     const sx = toFloat(tfScl.x, 1), sy = toFloat(tfScl.y, 1), sz = toFloat(tfScl.z, 1);
-    const radius = toFloat(cr.radius, 1);
+    // 算子驱动半径优先（Unity randomNumber → circle.radius），否则用内联字面量
+    const radius = radiusOverride || toFloat(cr.radius, 1);
     const arc = toFloat(ac.arc, 6.2831853);
     // 直接用 BuildTRS 构造 transform，Circle 在 local XY 平面生成后用 _circleTRS 变换
     const lines: string[] = [];
@@ -485,6 +486,9 @@ interface IShapeGenOpts {
     thickness: string;
     heightMode: string;
     spawn?: SpawnOpts;
+    /** 算子驱动的半径（Unity randomNumber → circle/sphere.radius 等逐粒子半径）。
+     *  存在时覆盖形状内联 radius 字面量。已 hoist 成局部变量名（如 _shapeRadius）。 */
+    radiusOverride?: string;
 }
 
 interface IShapeDef {
@@ -520,7 +524,7 @@ const SHAPE_DEFS: Record<string, IShapeDef> = {
     Circle: {
         slotId: "arcCircle",
         compiled: (e, s, pV, i, m, o) => genCircleCompiled(e, s, pV, i, m, o.thickness, o.spawn),
-        fallback: (p, pV, i, m, o) => genCircleFallback(p, pV, i, m, o.thickness, o.spawn),
+        fallback: (p, pV, i, m, o) => genCircleFallback(p, pV, i, m, o.thickness, o.spawn, o.radiusOverride),
     },
     Line: {
         slotId: "line",
@@ -569,6 +573,22 @@ export function genSetPositionShapeCode(
         const lineRes = compiler.compileBlockInput(contextId, `block_${block.id}_lineSequencer`, "float");
         if (lineRes) { seqStmts.push(...lineRes.stmts); lineSeqExpr = lineRes.expr; }
     }
+    // 算子驱动的半径（Unity randomNumber/operator → 形状 radius 逐粒子）。
+    // 转换器把这种 link 写成 block_<id>_radius（blockLinkSlotId 特判 setPositionShape.radius）。
+    // hoist 成局部 _shapeRadius 避免在 genRadialSampling + _shapePos 处重复求值。
+    let radiusOverride: string | undefined;
+    const radiusStmts: string[] = [];
+    if (compiler && contextId != null) {
+        const rRes = compiler.compileBlockInput(contextId, `block_${block.id}_radius`, "float");
+        if (rRes) {
+            // ⚠ op 声明（如 float _op6 = ...）必须在【顶层】emit，不能进形状的 { } 作用域 ——
+            // 否则同一 op 被 size/lifetime 复用时（编译器缓存只引用不再声明）在 { } 外引用 = undeclared。
+            // 变量名带 block.id 后缀避免多个 setPositionShape 撞名。
+            radiusStmts.push(...rRes.stmts);
+            radiusStmts.push(`float _shapeRadius_${block.id} = ${rRes.expr};`);
+            radiusOverride = `_shapeRadius_${block.id}`;
+        }
+    }
     const spawn: SpawnOpts = {
         custom: (p.spawnMode as string) === "Custom" && shape !== "Box",
         arcSeq: arcSeqExpr,
@@ -581,12 +601,13 @@ export function genSetPositionShapeCode(
 
     const lines: string[] = [];
     const inner = indent + "    ";
-    // emit 上面的 sequencer op statements (在 shape code 之前)
+    // emit 上面的 sequencer + radius op statements (在 shape code 之前，顶层作用域)
     for (const s of seqStmts) lines.push(`${indent}${s}`);
+    for (const s of radiusStmts) lines.push(`${indent}${s}`);
     const shapeDef = SHAPE_DEFS[shape];
     if (!shapeDef) return [`${indent}// Unknown shape: ${shape}`];
 
-    const shapeOpts: IShapeGenOpts = { thickness, heightMode, spawn };
+    const shapeOpts: IShapeGenOpts = { thickness, heightMode, spawn, radiusOverride };
 
     // ── 编译路径：Operator 连线提供形状数据（已由编译器处理空间转换） ──
     if (compiler && contextId != null) {

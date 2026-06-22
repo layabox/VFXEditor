@@ -201,6 +201,15 @@ vec4 GenerateCellularNoise(vec3 coord, float freq, int oct, float rough, float l
     return total / tAmp;
 }
 
+// 对齐 Unity Noise.cs：value = Fit(n.x, [rawMin,1], range)；derivatives = n.yzw * (range.y-range.x)
+// (n = GenerateXNoise 原始输出 vec4(value, dNdx,dNdy,dNdz); rawMin: Perlin=-1, Value/Cellular=0)
+// 之前转换器把 Unity noise 的 range 写进 _inputs.range，但编译器只读 amplitude(默认1) → range 被忽略
+// → 噪声及其导数不缩放(放大~500倍) → trail 位移漂移过大把粒子甩飞(Gateway Bronze VFX10 乱线根因)。
+vec4 _applyNoiseRange(vec4 n, vec2 range, float rawMin) {
+    float v = mix(range.x, range.y, clamp((n.x - rawMin) / max(1.0 - rawMin, 1e-6), 0.0, 1.0));
+    return vec4(v, n.yzw * (range.y - range.x));
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Curl Noise (divergence-free vector field from 2D derivatives)
 // ═══════════════════════════════════════════════════════════════
