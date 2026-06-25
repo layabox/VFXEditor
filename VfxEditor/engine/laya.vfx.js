@@ -920,6 +920,14 @@
             const colorDef = Laya.Shader3D.getDefineByName("COLOR");
             if (colorDef)
                 mat.addDefine(colorDef);
+            // EMISSION 宏: 蓝图 Lit shader(SurfaceShading→pbrFrag)里 `color += surface.emissionColor`
+            // 被 `#ifdef EMISSION` 门控。.bps material 没 emission 开关 → 宏不设 → 自定义 shader
+            // 算好的 emissionColor(materialize 溶解边缘 HDR 辉光/白块、emissionMap)被整段跳过。
+            // Unlit 路径无此分支不受影响; Lit 无 emission 时 emissionColor 默认 0 加 0 无害。
+            // 修 Energy DM materialize 白块/辉光缺失根因。
+            const emissionDef = Laya.Shader3D.getDefineByName("EMISSION");
+            if (emissionDef)
+                mat.addDefine(emissionDef);
             mat.setColor("u_Color", new Laya.Color(1, 1, 1, 1));
             mat.setTexture("u_AlbedoTexture", VFXRenderer.getDefaultDotTexture());
             mat.renderQueue = 3000;
@@ -1398,6 +1406,20 @@
             mat.depthTest = RS.DEPTHTEST_LESS;
             if (sd && opaqueDef)
                 sd.addDefine(opaqueDef);
+            return;
+        }
+        // AlphaClip: 对齐 Unity URP「Transparent + _ALPHATEST_ON + ZWrite On」(materialize 溶解雕像)。
+        // alpha 是二值(step 0/1),shader 端 alpha test discard 掉 alpha<阈值的像素,保留像素写深度,
+        // 让前后/内外面正确深度排序 → 雕像实心(非半透穿透)。仍用 alpha 混合保留 Unity 的边缘合成。
+        if (mode === "AlphaClip") {
+            if (sd && opaqueDef)
+                sd.removeDefine(opaqueDef);
+            mat.materialRenderMode = Laya.MaterialRenderMode.RENDERMODE_TRANSPARENT;
+            mat.blend = RS.BLEND_ENABLE_ALL;
+            mat.blendSrc = RS.BLENDPARAM_SRC_ALPHA;
+            mat.blendDst = RS.BLENDPARAM_ONE_MINUS_SRC_ALPHA;
+            mat.depthWrite = true;   // ← 关键: Unity ZWrite On
+            mat.depthTest = RS.DEPTHTEST_LESS;
             return;
         }
         if (sd && opaqueDef)
@@ -3743,6 +3765,9 @@
                         if (sys.shaderPropertyDefaults && typeof sys.shaderPropertyDefaults === "object") {
                             const entries = {};
                             for (const uniformName in sys.shaderPropertyDefaults) {
+                                // "mesh" 不是纹理 uniform，是 mesh 输出的 mesh 资源；误当纹理 setTexture 会让 Mesh 进纹理槽 → WebGPU 崩
+                                if (uniformName === "mesh")
+                                    continue;
                                 const url = sys.shaderPropertyDefaults[uniformName];
                                 if (typeof url !== "string" || !url)
                                     continue;
@@ -3890,7 +3915,14 @@
                             loadPromises.push(loadMesh);
                         }
                         else if (!isProceduralGeometry) {
-                            desc.mesh = buildMeshFallback();
+                            // mesh 输出但未指定 mesh（暴露 Mesh 属性未赋值，如 materialize/dissolve 未绑被溶解模型）：
+                            // Unity 渲染 nothing，不能 fallback 成球。mesh 类输出置 outputType="none" 跳过渲染。
+                            if (desc.outputType === "outputMesh" || desc.outputType === "outputStaticMesh") {
+                                desc.outputType = "none";
+                            }
+                            else {
+                                desc.mesh = buildMeshFallback();
+                            }
                         }
                         if (sys.textureUniforms && Array.isArray(sys.textureUniforms)) {
                             for (const tu of sys.textureUniforms) {
@@ -3935,6 +3967,14 @@
                                 if (meshPCMatch) {
                                     const pcRole = meshPCMatch[1] === "SurfacePoints" ? "surface" : "volume";
                                     const pointCount = Math.max(16, Math.min(8192, Number(tu.pointCount) || 1024));
+                                    if (uuid.startsWith("builtin:")) {
+                                        // 内置 mesh(如 Capsule): 同步生成 + 烘点云,无异步加载(不卡 asset 加载)
+                                        const builtinMesh = buildBuiltinMesh(uuid.slice(8));
+                                        if (builtinMesh)
+                                            entry.texture = pcRole === "surface" ? bakeMeshSurfacePoints(builtinMesh, pointCount) : bakeMeshVolumePoints(builtinMesh, pointCount);
+                                        else
+                                            console.warn(`[VFX] setPositionMesh(${pcRole}): unknown builtin mesh ${uuid}`);
+                                    } else {
                                     const meshUrl = uuid.startsWith("res://") ? uuid : "res://" + uuid;
                                     const loadMeshTex = Laya.Laya.loader.load(meshUrl).then((mesh) => {
                                         if (mesh)
@@ -3945,6 +3985,7 @@
                                             console.warn(`[VFX] setPositionMesh(${pcRole}): failed to load mesh ${meshUrl}`);
                                     });
                                     loadPromises.push(loadMeshTex);
+                                    }
                                 }
                                 else if (meshRoleMatch) {
                                     const role = meshRoleMatch[1].toLowerCase();
@@ -3988,10 +4029,27 @@
                         }
                         if (sys.bufferUniforms && Array.isArray(sys.bufferUniforms)) {
                             for (const bu of sys.bufferUniforms) {
-                                desc.bufferUniforms.push({
-                                    uniformName: bu.uniformName,
-                                    propertyName: bu.propertyName,
-                                });
+                                if (bu.meshProp) {
+                                    // setPositionMesh 点云: 烘 DeviceBuffer (对齐 Unity buffer 采样)
+                                    if (!desc.meshPointBuffers) desc.meshPointBuffers = [];
+                                    const mpEntry = { uniformName: bu.uniformName, buffer: null };
+                                    desc.meshPointBuffers.push(mpEntry);
+                                    const pcUuid = String(bu.meshProp);
+                                    const pcUrl = pcUuid.startsWith("res://") ? pcUuid : "res://" + pcUuid;
+                                    const pcRole = String(bu.meshRole || "surfacePoints");
+                                    const pcCount = Math.max(16, Math.min(8192, Number(bu.pointCount) || 1024));
+                                    loadPromises.push(Laya.Laya.loader.load(pcUrl).then((mesh) => {
+                                        try {
+                                            if (mesh) mpEntry.buffer = pcRole === "volumePoints" ? bakeMeshVolumePointsBuffer(mesh, pcCount) : bakeMeshSurfacePointsBuffer(mesh, pcCount);
+                                            else console.warn("[VFX] setPositionMesh(buffer): failed to load mesh " + pcUrl);
+                                        } catch (e) { console.error("[VFX] setPositionMesh bake error:", e); }
+                                    }, (err) => { console.warn("[VFX] setPositionMesh load error " + pcUrl, err); }));
+                                } else {
+                                    desc.bufferUniforms.push({
+                                        uniformName: bu.uniformName,
+                                        propertyName: bu.propertyName,
+                                    });
+                                }
                             }
                         }
                         if (sys.outputEvents && Array.isArray(sys.outputEvents)) {
@@ -4653,9 +4711,28 @@
         const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
         return t > 1e-6 ? t : null;
     }
+    const _f16f32buf = new Float32Array(1);
+    const _f16i32buf = new Int32Array(_f16f32buf.buffer);
+    function _f32tof16(val) {
+        _f16f32buf[0] = val;
+        const x = _f16i32buf[0];
+        let bits = (x >> 16) & 0x8000;
+        let m = (x >> 12) & 0x07ff;
+        const e = (x >> 23) & 0xff;
+        if (e < 103) return bits;
+        if (e > 142) { bits |= 0x7c00; return bits; }
+        if (e < 113) { m |= 0x0800; bits |= (m >> (114 - e)) + ((m >> (113 - e)) & 1); return bits; }
+        bits |= ((e - 112) << 10) | (m >> 1);
+        bits += m & 1;
+        return bits;
+    }
     function _makePointTexture(data, count) {
-        const tex = new Laya.Texture2D(count, 1, Laya.TextureFormat.R32G32B32A32, false, false, false, false);
-        tex.setPixelsData(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), false, false);
+        // 点云改半精度 R16G16B16A16(可过滤): R32G32B32A32(rgba32float)不可过滤,
+        // compute bind group 按可过滤 float 声明它 → 绑不上(替换默认) → texelFetch 读 0 → 粒子塌原点。
+        const half = new Uint16Array(count * 4);
+        for (let i = 0; i < count * 4; i++) half[i] = _f32tof16(data[i]);
+        const tex = new Laya.Texture2D(count, 1, Laya.TextureFormat.R16G16B16A16, false, false, false, false);
+        tex.setPixelsData(new Uint8Array(half.buffer, half.byteOffset, half.byteLength), false, false);
         tex.wrapModeU = Laya.WrapMode.Clamp;
         tex.wrapModeV = Laya.WrapMode.Clamp;
         tex.filterMode = Laya.FilterMode.Point;
@@ -4666,6 +4743,48 @@
         data[3] = 1;
         return _makePointTexture(data, 1);
     }
+    // ── 点云 storage buffer (对齐 Unity buffer 采样, 绕开 WebGPU compute 动态纹理绑定 bug) ──
+    function _makePointBuffer(data, count) {
+        const buf = new Laya.DeviceBuffer(count * 16, Laya.EDeviceBufferUsage.STORAGE | Laya.EDeviceBufferUsage.COPY_DST);
+        buf.deviceBuffer.setData(data.buffer, 0, 0, count * 16);
+        return buf;
+    }
+    function _computeSurfacePointsDataB(mesh, count) {
+        const tri = getMeshTriangles(mesh);
+        if (!tri || tri.indices.length < 3) return null;
+        const positions = tri.positions, indices = tri.indices;
+        const triCount = (indices.length / 3) | 0;
+        if (triCount <= 0) return null;
+        // 按三角形均匀采样(对齐 Unity: 细分密区域三角形多→两端更密)
+        const data = new Float32Array(count * 4);
+        for (let p = 0; p < count; p++) {
+            const ti = Math.min((Math.random() * triCount) | 0, triCount - 1);
+            const a = positions[indices[ti * 3]], b = positions[indices[ti * 3 + 1]], c = positions[indices[ti * 3 + 2]];
+            if (!a || !b || !c) continue;
+            let u = Math.random(), v = Math.random();
+            if (u + v > 1) { u = 1 - u; v = 1 - v; }
+            const w = 1 - u - v;
+            data[p * 4] = w * a.x + u * b.x + v * c.x;
+            data[p * 4 + 1] = w * a.y + u * b.y + v * c.y;
+            data[p * 4 + 2] = w * a.z + u * b.z + v * c.z;
+            data[p * 4 + 3] = 1;
+        }
+        return data;
+    }
+    function _fallbackPointDataB(count) {
+        const data = new Float32Array(count * 4);
+        for (let i = 0; i < count; i++) data[i * 4 + 3] = 1;
+        return data;
+    }
+    function bakeMeshSurfacePointsBuffer(mesh, count) {
+        const data = _computeSurfacePointsDataB(mesh, count) || _fallbackPointDataB(count);
+        return _makePointBuffer(data, count);
+    }
+    function bakeMeshVolumePointsBuffer(mesh, count) {
+        // bundle: 体积用表面近似(swarm 是 Surface 主用例; 源码有完整 volume)
+        const data = _computeSurfacePointsDataB(mesh, count) || _fallbackPointDataB(count);
+        return _makePointBuffer(data, count);
+    }
     function bakeMeshSurfacePoints(mesh, count) {
         const tri = getMeshTriangles(mesh);
         if (!tri || tri.indices.length < 3) {
@@ -4674,30 +4793,12 @@
         }
         const { positions, indices } = tri;
         const triCount = (indices.length / 3) | 0;
-        const cdf = new Float32Array(triCount);
-        let total = 0;
-        for (let i = 0; i < triCount; i++) {
-            const a = positions[indices[i * 3]];
-            const b = positions[indices[i * 3 + 1]];
-            const c = positions[indices[i * 3 + 2]];
-            if (a && b && c)
-                total += _triArea(a, b, c);
-            cdf[i] = total;
-        }
-        if (total <= 0)
+        if (triCount <= 0)
             return _fallbackPointTexture();
+        // 按三角形均匀采样(每个三角形等概率,非面积加权) — 对齐 Unity: 细分密的区域(胶囊半球帽)三角形多 → 两端更密
         const data = new Float32Array(count * 4);
         for (let p = 0; p < count; p++) {
-            const r = Math.random() * total;
-            let lo = 0, hi = triCount - 1;
-            while (lo < hi) {
-                const mid = (lo + hi) >> 1;
-                if (cdf[mid] < r)
-                    lo = mid + 1;
-                else
-                    hi = mid;
-            }
-            const ti = lo;
+            const ti = Math.min((Math.random() * triCount) | 0, triCount - 1);
             const a = positions[indices[ti * 3]];
             const b = positions[indices[ti * 3 + 1]];
             const c = positions[indices[ti * 3 + 2]];
@@ -4908,9 +5009,11 @@
                     result = Math.floor(ctx.totalTime * 60);
                     break;
                 case "GlobalTimeRatio":
-                    result = ctx.hasContinuousSpawn
+                    // n.continuous: per-system spawn 类型(整合多系统时全局 hasContinuousSpawn 会误判单burst materialize);
+                    //   有则优先,缺省回退全局。n.duration: 单burst 粒子 lifetime(materialize=4s)。
+                    result = ((n.continuous != null) ? n.continuous : ctx.hasContinuousSpawn)
                         ? (ctx.totalTime - Math.floor(ctx.totalTime))
-                        : Math.min(ctx.totalTime, 1);
+                        : Math.min(ctx.totalTime / (n.duration || 1), 1);
                     break;
                 case "Random": {
                     const min = Number(this._evalNode(n.inputs[0], nodes, cache, ctx)) || 0;
@@ -6377,6 +6480,24 @@
                         continue;
                     for (const sd of allDatas) {
                         sd.setTexture(id, texture);
+                    }
+                }
+            }
+            // 绑定 setPositionMesh 点云 storage buffer (mesh 烘焙的 DeviceBuffer, 对齐 Unity buffer 采样)
+            for (let i = 0; i < this.systems.length; i++) {
+                const system = this.systems[i];
+                const desc = descs[i];
+                if (!(system instanceof VFXParticleSystem))
+                    continue;
+                if (!desc || !desc.meshPointBuffers || desc.meshPointBuffers.length === 0)
+                    continue;
+                const allDatas = system.getAllShaderDatas();
+                for (const mpb of desc.meshPointBuffers) {
+                    if (!mpb.buffer)
+                        continue;
+                    const id = Laya.Shader3D.propertyNameToID(mpb.uniformName + "Buffer");
+                    for (const sd of allDatas) {
+                        sd.setDeviceBuffer(id, mpb.buffer.deviceBuffer);
                     }
                 }
             }

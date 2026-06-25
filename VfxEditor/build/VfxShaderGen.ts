@@ -134,8 +134,8 @@ export interface IShaderGenResult {
     curveEntries?: Map<number, number[]>;
     /** 本 system 收集到的 Texture2D/Texture3D uniform → texture UUID 映射 */
     textureUniforms?: Array<{ uniformName: string; uuid: string; textureType: string }>;
-    /** 本 system 收集到的 StorageBuffer uniform → property name 映射 */
-    bufferUniforms?: Array<{ uniformName: string; propertyName: string }>;
+    /** 本 system 收集到的 StorageBuffer uniform → property name 映射 (mesh 点云走 meshProp 烘焙) */
+    bufferUniforms?: Array<{ uniformName: string; propertyName?: string; meshProp?: string; meshRole?: string; pointCount?: number }>;
 }
 
 /**
@@ -328,12 +328,17 @@ export class VfxShaderGen {
 
         // 收集 StorageBuffer 声明（注入到 GLSL body，不是 uniformMap）
         const storageBufferDecls: string[] = [];
-        const bufferUniforms: Array<{ uniformName: string; propertyName: string }> = [];
+        const bufferUniforms: Array<{ uniformName: string; propertyName?: string; meshProp?: string; meshRole?: string; pointCount?: number }> = [];
         allPropertyUniforms.forEach((val: any, propName: string) => {
             if (val && typeof val === "object" && val.type === "StorageBuffer" && val._bufferProperty) {
                 const bufName = val._rawUniformName as string;
                 storageBufferDecls.push(`buffer ${bufName}Buffer { vec4 data[]; } ${bufName};`);
                 bufferUniforms.push({ uniformName: bufName, propertyName: val._bufferProperty });
+            } else if (val && typeof val === "object" && val.type === "StorageBuffer" && val._meshBake) {
+                // setPositionMesh 点云: storage buffer + 引擎烘焙(对齐 Unity, 绕开 WebGPU compute 纹理绑定 bug)
+                const bufName = val._rawUniformName as string;
+                storageBufferDecls.push(`buffer ${bufName}Buffer { vec4 data[]; } ${bufName};`);
+                bufferUniforms.push({ uniformName: bufName, meshProp: val._meshBake.meshProp, meshRole: val._meshBake.meshRole, pointCount: val._meshBake.pointCount });
             }
         });
         const storageBufferCode = storageBufferDecls.length > 0 ? "\n" + storageBufferDecls.join("\n") + "\n" : "";
