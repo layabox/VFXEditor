@@ -34,7 +34,7 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
     private _loadInflight: boolean = false;
 
     // 已构建的行(供 resize 时廉价重排, 不重建)
-    private _rowItems: Array<{ row: gui.Box; label: gui.TextField; display: string; editor: any; editorY: number; editorH: number }> = [];
+    private _rowItems: Array<{ row: gui.Box; label: gui.TextField; display: string; editor: any; editorY: number; editorH: number; overlay?: any }> = [];
     private _relayouting: boolean = false;
 
     // 分组折叠状态(组名 → 是否折叠), 点击组标题箭头切换, 折叠则不渲染该组属性行
@@ -97,6 +97,12 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
                     try {
                         it.editor.setPos(editorX, it.editorY);
                         it.editor.setSize(editorW, it.editorH);
+                    } catch { }
+                }
+                if (it.overlay) {   // HDR 标签覆盖在 editor 上，居中跟随
+                    try {
+                        it.overlay.setPos(editorX, 1);
+                        it.overlay.setSize(editorW, rh - 2);
                     } catch { }
                 }
             }
@@ -290,6 +296,7 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             label.color = enabled ? 0xEEEEEE : 0x999999;
             label.wrap = false;
             try { label.style.fontSize = 12; } catch { }
+            try { (label.style as any).valign = (gui as any).VAlignType.Middle; } catch { }   // 文字垂直居中，跟 checkbox 中心对齐
             try { (label as any).title = display; } catch { }   // 悬停显示完整名
             label.setSize(labelW, rh);
             label.setPos(cbW + gap, 0);
@@ -316,8 +323,14 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             } else if (t === "texture2d") {
                 editor = this._addTextureEditor(row, p, overrides, enabled, editorX, editorW, rh);
                 editorY = 1; editorH = rh - 2;
+            } else if (t === "bool") {
+                editor = this._addBoolEditor(row, p.name, curVal, overrides, enabled, editorX, editorW, rh);
+                editorY = 0; editorH = rh;
+            } else if (t === "mesh") {
+                editor = this._addMeshEditor(row, p, overrides, enabled, editorX, editorW, rh);
+                editorY = 1; editorH = rh - 2;
             } else {
-                // 仍不支持的类型(Mesh/Texture3D/Cube...)显示只读说明
+                // 仍不支持的类型(Texture3D/Cube...)显示只读说明
                 const note = new gui.TextField();
                 note.text = `(${p.type}: 暂不支持)`;
                 note.color = 0x888888;
@@ -330,7 +343,8 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             }
 
             this._box.addChild(row);
-            this._rowItems.push({ row, label, display, editor, editorY, editorH });
+            // HDR 标签(gradient/color 编辑器在 HDR 值时挂在 editor 上，叠在 swatch 中央，对齐 Unity)
+            this._rowItems.push({ row, label, display, editor, editorY, editorH, overlay: (editor as any)?._hdrOverlay || null });
             this._builtHeight += this._rowHeight;
         } catch (e) {
             console.warn("[VfxPropertyOverrides] addPropertyRow failed for", p?.name, e);
@@ -386,6 +400,28 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
         return input;
     }
 
+    /** Bool 编辑控件：勾选框(参考 Unity Inspector 的 bool 行)。override 存 [1]/[0]，
+     *  运行时 _applyPropertyOverrides 走 length=1 → setPropertyFloat 驱动 bool uniform((u_VfxProp != 0.0))。
+     *  commit 内置 _selfCommitEcho 守卫,不会回声重建销毁 widget。返回 widget 供 _relayout 重摆。 */
+    private _addBoolEditor(
+        row: gui.Box, propName: string, values: number[],
+        overrides: { [name: string]: number[] }, enabled: boolean,
+        x: number, width: number, rh: number,
+    ): any {
+        const localVals: number[] = [Number(values?.[0] ?? 0) ? 1 : 0];
+        const cb: any = this._createCheckbox(localVals[0] === 1);
+        try { cb.setSize(20, 18); cb.setPos(x, Math.floor((rh - 18) / 2)); } catch { }
+        try { cb.touchable = enabled; cb.alpha = enabled ? 1.0 : 0.4; } catch { }
+        cb.on("changed", () => {
+            if (!enabled) return;
+            localVals[0] = cb.selected ? 1 : 0;
+            overrides[propName] = localVals.slice();
+            this._commit(overrides);
+        }, this);
+        row.addChild(cb);
+        return cb;
+    }
+
     /** Vec2/3/4 编辑控件：直接复用 IDE 标准 Vec*Field.widget 预制件,
      *  其内部 relation 会把 x/y/z/w 输入框等分并随宽度伸缩(跟 Position 字段完全一致). 返回 widget. */
     private _addVecEditor(
@@ -432,15 +468,24 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
     ): any {
         try {
             const input: any = gui.UIPackage.createWidgetSync("~/ui/basic/ColorPicker/ColorInput.widget");
-            const r = Number(values?.[0] ?? 0);
-            const g = Number(values?.[1] ?? 0);
-            const b = Number(values?.[2] ?? 0);
+            const r0 = Number(values?.[0] ?? 0);
+            const g0 = Number(values?.[1] ?? 0);
+            const b0 = Number(values?.[2] ?? 0);
             const a = Number(values?.[3] ?? 1);
+            // HDR(分量>1)按最大分量归一化到 [0,1] 显示，保留色相(对齐 Unity color 字段显示色相)。
+            // 否则 HDR 值灌进 gui.Color → getStyleString hex 溢出 → 颜色错乱(蓝显示成绿)。单色 swatch 用归一化
+            // 而非 clamp:clamp 会把 HDR 蓝变白丢色相。存原始 HDR，提交时未改则还原(见下)。
+            this._colorOrig[propName] = [r0, g0, b0, a];
+            const m = Math.max(r0, g0, b0, 1);
             try {
-                // ColorInput 用 gui.Color 设值
+                // ColorInput 用 gui.Color 设值(归一化后的显示色)。
+                // ⚠ 必须直接设 colorValue：ColorInput 构造函数不初始化 _colorValue(初始 undefined)，
+                // 原先的 `if (input.colorValue)` 守卫永远 false → 颜色从没设上 → 显示预制件默认绿(本 bug 根因)。
+                try { (input as any).checkable = false; } catch { }   // 关 nullable 勾选，确保始终显示颜色值
+                try { (input as any).hideAlpha = true; } catch { }     // 忽略 alpha 当不透明显示(纯色，无棋盘格)，贴近 Unity HDR 颜色字段
                 const col = new gui.Color();
-                col.r = r; col.g = g; col.b = b; col.a = a;
-                if ((input as any).colorValue) (input as any).colorValue = col;
+                col.r = r0 / m; col.g = g0 / m; col.b = b0 / m; col.a = a;
+                (input as any).colorValue = col;
                 input.touchable = enabled;
                 input.alpha = enabled ? 1.0 : 0.4;
             } catch (e) { console.warn("[VfxPropertyOverrides] color init failed", e); }
@@ -451,12 +496,26 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
                 try {
                     const c: any = (input as any).colorValue;
                     if (c) {
-                        overrides[propName] = [Number(c.r) || 0, Number(c.g) || 0, Number(c.b) || 0, Number(c.a) || 1];
+                        const er = Number(c.r) || 0, eg = Number(c.g) || 0, eb = Number(c.b) || 0;
+                        const ea = (c.a != null ? Number(c.a) : 1);
+                        // 未改(值≈归一化后的原始 HDR)→ 还原原始 HDR；改了→用编辑值(LDR)
+                        const orig = this._colorOrig[propName];
+                        if (orig) {
+                            const om = Math.max(orig[0], orig[1], orig[2], 1);
+                            const near = (xv: number, yv: number) => Math.abs(xv - yv) <= 0.01;
+                            if (near(er, orig[0] / om) && near(eg, orig[1] / om) && near(eb, orig[2] / om) && near(ea, orig[3])) {
+                                overrides[propName] = [orig[0], orig[1], orig[2], orig[3]];
+                                this._commit(overrides);
+                                return;
+                            }
+                        }
+                        overrides[propName] = [er, eg, eb, ea];
                         this._commit(overrides);
                     }
                 } catch (e) { console.warn("[VfxPropertyOverrides] color submit err", e); }
             }, this);
             row.addChild(input);
+            if (r0 > 1 || g0 > 1 || b0 > 1) (input as any)._hdrOverlay = this._makeHdrOverlay(row, x, width, rh);
             return input;
         } catch (e) {
             // ColorInput widget 不存在或抛错 → fallback 用单个 NumericInput
@@ -473,7 +532,8 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             const stops = (p.default && Array.isArray(p.default.stops)) ? p.default.stops : [];
             try { return { stops: JSON.parse(JSON.stringify(stops)) }; } catch { return { stops: [] }; }
         }
-        if (t === "texture2d") {
+        if (t === "texture2d" || t === "mesh") {
+            // 资源引用类(纹理/mesh)：override 存 res://uuid 字符串
             const d = p.default;
             const url = Array.isArray(d) ? d[0] : (typeof d === "string" ? d : "");
             return url || "";
@@ -520,6 +580,46 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
         return input;
     }
 
+    /** Mesh 编辑控件：ResourceInput 资源选择器（限 Mesh 类型）。override 存 "res://uuid" 字符串。
+     *  运行时 _applyPropertyOverrides 按属性 type=Mesh 分流到 setPropertyMesh → 重绑 GPU 几何换 mesh。 */
+    private _addMeshEditor(
+        row: gui.Box, p: any, overrides: any, enabled: boolean,
+        x: number, width: number, rh: number,
+    ): any {
+        let input: any = null;
+        try { input = gui.UIPackage.createWidgetSync("~/ui/basic/Input/ResourceInput.widget"); }
+        catch (e) { console.warn("[VfxPropertyOverrides] ResourceInput unavailable:", e); }
+        if (!input) {
+            const note = new gui.TextField();
+            note.text = "(Mesh)"; note.color = 0x888888; note.wrap = false;
+            note.setSize(width, rh); note.setPos(x, 0); row.addChild(note);
+            return note;
+        }
+        try { input.typeFilter = ["Mesh"]; } catch { }
+        // 当前值：override(res://uuid) 优先，否则资产默认 default[0]
+        const cur = overrides[p.name];
+        let url = (typeof cur === "string" && cur)
+            ? cur
+            : (Array.isArray(p.default) ? p.default[0] : (typeof p.default === "string" ? p.default : ""));
+        const uuid = (typeof url === "string") ? url.replace(/^res:\/\//, "") : "";
+        try { input.text = uuid; } catch { }
+        try { input.editable = enabled; input.grayed = !enabled; } catch { }
+        try { input.alpha = enabled ? 1.0 : 0.5; } catch { }
+        input.setSize(width, rh - 2);
+        input.setPos(x, 1);
+        input.on("submit", () => {
+            if (!enabled) return;
+            try {
+                const asset = (input as any).assetValue;
+                if (asset && asset.id) overrides[p.name] = "res://" + asset.id;
+                else if (typeof url === "string" && url) overrides[p.name] = url;   // 清空时回退默认 url
+                this._commit(overrides);
+            } catch (e) { console.warn("[VfxPropertyOverrides] mesh submit err", e); }
+        }, this);
+        row.addChild(input);
+        return input;
+    }
+
     /** Gradient 编辑控件：复用 IDE GradientInput.widget（点击弹 GradientEditDialog 编辑）。override 存 {stops:[{t,color:{r,g,b,a}}]}。
      *  ⚠ HDR 限制：IDE 颜色选择器是 LDR(0-1)，编辑某 stop 会把它 clamp 到 [0,1]；未触碰的 stop 保留原 HDR 值。 */
     private _addGradientEditor(
@@ -540,10 +640,25 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
         const stops = (cur && typeof cur === "object" && Array.isArray(cur.stops))
             ? cur.stops
             : ((p.default && Array.isArray(p.default.stops)) ? p.default.stops : []);
+        // 显示用 clamp(HDR>1 分量截白，对齐 Unity 渐变条 clamp 带的爆白主视觉)；
+        // 存原始 HDR stops，提交时把"未被编辑"的 stop 还原成原始 HDR(见 _reconcileHdrStops)→ 不丢未改 stop 的强度。
+        this._gradientOrig[p.name] = (Array.isArray(stops) ? stops : []).map((s: any) => {
+            const c = s.color || {};
+            const a0 = Array.isArray(c) ? c[3] : c.a;
+            return {
+                t: Number(s.t) || 0,
+                color: {
+                    r: Number(Array.isArray(c) ? c[0] : c.r) || 0,
+                    g: Number(Array.isArray(c) ? c[1] : c.g) || 0,
+                    b: Number(Array.isArray(c) ? c[2] : c.b) || 0,
+                    a: a0 != null ? Number(a0) : 1,
+                },
+            };
+        });
         try {
             const gv = (input as any).value;   // GradientInput 内部已 new GradientValue()，直接复用其实例
             if (gv && typeof gv.fromData === "function") {
-                gv.fromData(this._stopsToLayaGradient(stops));
+                gv.fromData(this._stopsToLayaGradient(stops));   // _stopsToLayaGradient 内 clamp 显示
                 (input as any).value = gv;     // 触发 setter 刷新渐变条显示
             }
         } catch (e) { console.warn("[VfxPropertyOverrides] gradient set value err", e); }
@@ -556,19 +671,64 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             try {
                 const gv = (input as any).value;
                 if (gv && typeof gv.toData === "function") {
-                    overrides[p.name] = { stops: this._layaGradientToStops(gv.toData()) };
+                    // 编辑器吐 clamp/LDR 值 → 未改的 stop 还原原始 HDR，改了的用编辑值
+                    const editedStops = this._layaGradientToStops(gv.toData());
+                    overrides[p.name] = { stops: this._reconcileHdrStops(editedStops, this._gradientOrig[p.name]) };
                     this._commit(overrides);
                 }
             } catch (e) { console.warn("[VfxPropertyOverrides] gradient submit err", e); }
         }, this);
         row.addChild(input);
+        const _isHdrGrad = (Array.isArray(stops) ? stops : []).some((s: any) => {
+            const c = s.color || {};
+            return (Number(Array.isArray(c) ? c[0] : c.r) || 0) > 1
+                || (Number(Array.isArray(c) ? c[1] : c.g) || 0) > 1
+                || (Number(Array.isArray(c) ? c[2] : c.b) || 0) > 1;
+        });
+        if (_isHdrGrad) (input as any)._hdrOverlay = this._makeHdrOverlay(row, x, width, rh);
         return input;
     }
 
+    /** HDR 显示用：每个 gradient 属性的原始 HDR stops(按位置 t)。clamp 显示后，提交时未被编辑的 stop 据此还原完整 HDR。 */
+    private _gradientOrig: { [name: string]: any[] } = {};
+
+    /** HDR 显示用：每个 color 属性的原始 HDR 值 [r,g,b,a]。归一化显示后，提交时未改则还原完整 HDR。 */
+    private _colorOrig: { [name: string]: number[] } = {};
+
+    /** 提交协调：编辑器吐回 clamp/LDR 值。若某 stop 的值 ≈ 原始 HDR 的 clamp(说明用户没动它)→ 还原原始 HDR；
+     *  否则用编辑值(用户确实改了，接受 LDR)。按位置 t 匹配，容差含字节往返误差。
+     *  对齐 Unity:HDR 渐变条 clamp 带爆白显示(见 [[reference_unity_hdr_color_computation]])，编辑只动 clamp 后的 LDR。 */
+    private _reconcileHdrStops(editedStops: any[], origStops: any[]): any[] {
+        const orig = Array.isArray(origStops) ? origStops : [];
+        const cl = (v: number) => Math.min(1, Math.max(0, v));
+        const near = (a: number, b: number) => Math.abs(a - b) <= 0.01;   // 字节往返 ~1/255 容差
+        return (Array.isArray(editedStops) ? editedStops : []).map(s => {
+            const ec = s.color || {};
+            let match: any = null, best = 0.02;
+            for (const o of orig) {
+                const d = Math.abs((Number(o.t) || 0) - (Number(s.t) || 0));
+                if (d <= best) { best = d; match = o; }
+            }
+            if (match) {
+                const oc = match.color || {};
+                const sameAsClampedOrig =
+                    near(Number(ec.r) || 0, cl(Number(oc.r) || 0)) &&
+                    near(Number(ec.g) || 0, cl(Number(oc.g) || 0)) &&
+                    near(Number(ec.b) || 0, cl(Number(oc.b) || 0)) &&
+                    near((ec.a != null ? Number(ec.a) : 1), (oc.a != null ? Number(oc.a) : 1));
+                if (sameAsClampedOrig) {
+                    // 未改 → 还原原始 HDR(完整强度)
+                    return { t: s.t, color: { r: Number(oc.r) || 0, g: Number(oc.g) || 0, b: Number(oc.b) || 0, a: (oc.a != null ? Number(oc.a) : 1) } };
+                }
+            }
+            return s;   // 改了 → 用编辑值(LDR)
+        });
+    }
+
     /** 我方 stops [{t,color:{r,g,b,a}}] → Laya GradientValue 数据(RGB/alpha 键分离)。
-     *  ⚠ HDR 显示归一化：gui.Color.getStyleString 在 a==1 时走 toString() 转 hex，分量 >1(HDR)会
-     *  让 round(c*255) 超出 0xFF → hex 串畸形 → 渐变条颜色错乱(青被显示成橄榄)。故按最大分量归一化到
-     *  [0,1] 保留色相(对齐 Unity HDR 渐变条只显示色相)。仅影响【显示】，override/运行时仍是原始 HDR stops。 */
+     *  ⚠ HDR 显示 clamp：HDR>1 分量截到 [0,1] → 超亮处爆白(对齐 Unity 渐变条 clamp 带的爆白主视觉)。
+     *  同时避免 >1 撑爆 gui.Color.getStyleString 的 hex 转换(round(c*255)>0xFF 让 hex 串畸形 → 青显示成橄榄)。
+     *  仅影响【显示】，override/运行时仍是原始 HDR stops(未改 stop 提交时由 _reconcileHdrStops 还原)。 */
     private _stopsToLayaGradient(stops: any[]): any {
         const src = (Array.isArray(stops) && stops.length)
             ? stops
@@ -581,8 +741,10 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
             let g = Number(Array.isArray(c) ? c[1] : c.g) || 0;
             let b = Number(Array.isArray(c) ? c[2] : c.b) || 0;
             const a = Array.isArray(c) ? c[3] : c.a;
-            const m = Math.max(r, g, b, 1);   // HDR(max>1)按最大分量归一化保留色相；LDR(max≤1)不变
-            if (m > 1) { r /= m; g /= m; b /= m; }
+            // clamp 到 [0,1]：HDR>1 分量截白(对齐 Unity clamp 带爆白主视觉)；同时避免 >1 撑爆 getStyleString hex
+            r = Math.min(1, Math.max(0, r));
+            g = Math.min(1, Math.max(0, g));
+            b = Math.min(1, Math.max(0, b));
             const t = Number(k.t) || 0;
             rgb.push(t, r, g, b);
             alpha.push(t, (a != null ? Number(a) : 1));
@@ -634,6 +796,25 @@ export class VfxPropertyOverridesField extends IEditor.PropertyField {
         }
         for (const f of fields) out[f] = last[f];
         return out;
+    }
+
+    /** 在 editor(渐变条/颜色 swatch)上叠 "HDR" 标签(分量>1 时)，对齐 Unity HDR 显示。
+     *  touchable=false 让点击穿透到下方编辑器；返回标签供 _relayout 跟随重定位。 */
+    private _makeHdrOverlay(row: gui.Box, x: number, w: number, rh: number): gui.TextField {
+        const tf = new gui.TextField();
+        tf.text = "HDR";
+        // 对齐 Unity centeredGreyMiniLabel：柔和灰字、无描边(去掉之前白字黑描边的生硬效果)。
+        // 0x9A9A9A 中性灰在蓝/白/爆白/深底上都可读，又不扎眼。
+        tf.color = 0x9A9A9A;
+        tf.wrap = false;
+        try { tf.style.fontSize = 10; } catch { }
+        try { tf.style.align = gui.AlignType.Center; } catch { }
+        try { (tf.style as any).valign = (gui as any).VAlignType.Middle; } catch { }
+        try { (tf as any).touchable = false; } catch { }   // 点击穿透到下方编辑器
+        tf.setSize(w, rh - 2);
+        tf.setPos(x, 1);
+        row.addChild(tf);   // 在 editor 之后添加 → z 序在上层
+        return tf;
     }
 
     /** 创建 checkbox widget（清空 default "text" 字段避免跟 label 文字重叠） */
