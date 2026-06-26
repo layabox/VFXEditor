@@ -1380,6 +1380,25 @@ export function genBlockCode(
             continue;
         }
 
+        // ── transformPosition: 用注册骨骼/Transform 的世界矩阵变换当前 position
+        //    (SkinnedMeshTransform): position = boneWorldMatrix * position
+        //    引擎 setTransformSource(name, node) 注入骨骼,_updateTransformSources 每帧绑 Mat4 uniform
+        //    → bolts/sparks 跟随该骨骼动画(Unity 真机制,对齐 [Bolts] Init 的 mul(uniform_k,...))
+        if (block.typeId === "transformPosition") {
+            if (!block.enabled) continue;
+            const p = block.props || {};
+            const tsrc = (p.transformSource as string) || "";
+            if (!tsrc) continue;
+            if (compiler) {
+                (compiler as any).propertyUniforms.set(`VfxTransform_${tsrc}`, { type: "Mat4", transformSource: tsrc });
+            }
+            const uni = `u_VfxProp_VfxTransform_${tsrc}`;
+            lines.push("");
+            lines.push(`    // transformPosition (${tsrc}) — 骨骼世界矩阵驱动,跟随动画`);
+            lines.push(`    ${particleVar}.position = (${uni} * vec4(${particleVar}.position, 1.0)).xyz;`);
+            continue;
+        }
+
         // ── setPositionMesh (Point Cache)
         //    Vertex: 采 mesh 顶点 (count = vertexCount)
         //    Surface: 按三角形面积加权采样 N 个表面点 (pre-bake)

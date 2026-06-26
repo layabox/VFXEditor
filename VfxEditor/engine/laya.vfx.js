@@ -2549,7 +2549,8 @@
                 }
                 const indirectUsage = Laya.EDeviceBufferUsage.INDIRECT |
                     Laya.EDeviceBufferUsage.STORAGE |
-                    Laya.EDeviceBufferUsage.COPY_DST;
+                    Laya.EDeviceBufferUsage.COPY_DST |
+                    Laya.EDeviceBufferUsage.COPY_SRC; // [BOLT-DBG] 允许读回 instanceCount
                 this.indirectBuffer = new Laya.DeviceBuffer(20, indirectUsage);
             }
             this.initSourceAttributes();
@@ -2960,6 +2961,29 @@
                 if (this._released)
                     return;
                 this.updateBoundsFromReadback();
+            });
+        }
+        dbgCopyIndirectToStaging(cmd) {
+            if (!this.indirectBuffer)
+                return;
+            if (!this._dbgIndirectStaging) {
+                this._dbgIndirectStaging = new Laya.DeviceBuffer(20, Laya.EDeviceBufferUsage.MAP_READ | Laya.EDeviceBufferUsage.COPY_DST);
+                this._dbgIndirectDest = new ArrayBuffer(20);
+            }
+            if (this._dbgIndirectPending)
+                return;
+            cmd.addBufferToBufferCommand(this.indirectBuffer.deviceBuffer, this._dbgIndirectStaging.deviceBuffer, 0, 0, 20);
+        }
+        dbgRequestIndirectReadback(label) {
+            if (!this._dbgIndirectStaging || this._dbgIndirectPending || this._released)
+                return;
+            this._dbgIndirectPending = true;
+            this._dbgIndirectStaging.deviceBuffer.readData(this._dbgIndirectDest, 0, 0, 20).then(() => {
+                this._dbgIndirectPending = false;
+                if (this._released)
+                    return;
+                const u = new Uint32Array(this._dbgIndirectDest);
+                console.log(`[BOLT-DBG] ${label} type=${this.outputType} recvGPU=${this.receiveGPUEvent} cap=${this.capacity} draw0=${u[0]} instanceCount=${u[1]}`);
             });
         }
         updateBoundsFromReadback() {
@@ -3937,6 +3961,12 @@
                                     entry.skinnedMeshRole = skinnedMeshMatch[1];
                                     continue;
                                 }
+                                // SkinnedMeshTransform: Mat4 uniform,非纹理。记 transformSource,
+                                // 引擎 _updateTransformSources 每帧绑注册骨骼的世界矩阵到该 uniform。
+                                if (textureType === "Transform") {
+                                    entry.transformSource = uuid;
+                                    continue;
+                                }
                                 if (textureType === "InlineGradient") {
                                     const rawStops = Array.isArray(tu.gradientStops) ? tu.gradientStops : [];
                                     const stops = rawStops.map((s) => {
@@ -4602,6 +4632,38 @@
         catch (e) {
             console.warn(`[VFX] bakeSkinnedMeshVertexTexture(${role}) failed`, e);
         }
+        // 面积加权采样:均匀随机采顶点会让密集顶点区(头/手细节多)被过采样→粒子堆头部。
+        // 改成按三角形面积加权采样 N 个顶点(pos/idx/weight 三 role 用同一缓存索引→蒙皮对齐),
+        // 让粒子按表面积均匀分布全身(对齐 Unity skinned mesh 面积采样)。同时 N≤8192 也绕开 16384 上限。
+        const AW_N = 8192;
+        const awIdx = computeAreaWeightedVertexIndices(mesh, Math.min(AW_N, count));
+        if (awIdx && count > 1) {
+            const n = awIdx.length;
+            const sub = new Float32Array(n * 4);
+            for (let o = 0; o < n; o++) {
+                const vi = awIdx[o] < count ? awIdx[o] : (count - 1);
+                sub[o * 4] = data[vi * 4];
+                sub[o * 4 + 1] = data[vi * 4 + 1];
+                sub[o * 4 + 2] = data[vi * 4 + 2];
+                sub[o * 4 + 3] = data[vi * 4 + 3];
+            }
+            if (role === "position") console.log(`[VFX] skinned 面积加权采样 ${count}→${n} 顶点(全身均匀)`);
+            data = sub;
+            count = n;
+        } else {
+            // fallback: 面积加权失败时,仍守 WebGPU 16384 上限(均匀 stride 降采样)
+            const MAXW = 16384;
+            if (count > MAXW) {
+                const stride = Math.ceil(count / MAXW);
+                const outCount = Math.ceil(count / stride);
+                const sub = new Float32Array(outCount * 4);
+                for (let o = 0, i = 0; o < outCount; o++, i += stride) {
+                    sub[o * 4] = data[i * 4]; sub[o * 4 + 1] = data[i * 4 + 1];
+                    sub[o * 4 + 2] = data[i * 4 + 2]; sub[o * 4 + 3] = data[i * 4 + 3];
+                }
+                data = sub; count = outCount;
+            }
+        }
         const tex = new Laya.Texture2D(count, 1, Laya.TextureFormat.R32G32B32A32, false, false, false, false);
         tex.setPixelsData(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), false, false);
         tex.wrapModeU = Laya.WrapMode.Clamp;
@@ -4633,6 +4695,37 @@
             const off = i * 16;
             for (let k = 0; k < 16; k++)
                 data[off + k] = e[k];
+        }
+        // DEBUG(临时): 打印蒙皮后位置包围盒(min/max),判断 swarm 应覆盖全身还是塌在脚下
+        if (bakeSkinnedMeshBonesTexture._dbgCount === undefined) bakeSkinnedMeshBonesTexture._dbgCount = 0;
+        if (bakeSkinnedMeshBonesTexture._dbgCount < 4) {
+            bakeSkinnedMeshBonesTexture._dbgCount++;
+            const ibpLen = inverseBindPoses ? inverseBindPoses.length : "NULL";
+            let bbStr = "?", bpBB = "?";
+            try {
+                const vs = []; mesh.getPositions(vs);
+                const bIs = []; mesh.getBoneIndices(bIs);
+                const bWs = []; mesh.getBoneWeights(bWs);
+                const sample = (vi) => {
+                    const p = vs[vi], bi = bIs[vi], bw = bWs[vi];
+                    const rd = (bidx) => { const o = bidx * 16; const m = data.slice(o, o + 16); return [m[0]*p.x+m[4]*p.y+m[8]*p.z+m[12], m[1]*p.x+m[5]*p.y+m[9]*p.z+m[13], m[2]*p.x+m[6]*p.y+m[10]*p.z+m[14]]; };
+                    const a = rd(bi.x), b = rd(bi.y), c = rd(bi.z), d = rd(bi.w);
+                    return [0,1,2].map(k => a[k]*bw.x + b[k]*bw.y + c[k]*bw.z + d[k]*bw.w);
+                };
+                const mn = [1e9,1e9,1e9], mx = [-1e9,-1e9,-1e9];       // 蒙皮后包围盒
+                const pmn = [1e9,1e9,1e9], pmx = [-1e9,-1e9,-1e9];     // 绑定姿势包围盒
+                const N = vs.length, step = Math.max(1, Math.floor(N / 300));
+                for (let vi = 0; vi < N; vi += step) {
+                    if (vs[vi]) { for (let k=0;k<3;k++){ const c=[vs[vi].x,vs[vi].y,vs[vi].z][k]; if(c<pmn[k])pmn[k]=c; if(c>pmx[k])pmx[k]=c; } }
+                    try { const s = sample(vi); for (let k=0;k<3;k++){ if(s[k]<mn[k])mn[k]=s[k]; if(s[k]>mx[k])mx[k]=s[k]; } } catch(e){}
+                }
+                const f = a => a.map(v=>v.toFixed(2)).join(",");
+                bpBB = `min(${f(pmn)}) max(${f(pmx)})`;
+                bbStr = `min(${f(mn)}) max(${f(mx)})`;
+            } catch (e) { bbStr = "err " + e.message; }
+            console.log("[SKIN-DBG] bones bake#" + bakeSkinnedMeshBonesTexture._dbgCount + " boneCount=" + boneCount + " ibp=" + ibpLen + " verts=" + (mesh && mesh.vertexCount) +
+                "\n  绑定姿势包围盒: " + bpBB +
+                "\n  蒙皮后包围盒(swarm应在此范围): " + bbStr);
         }
         let tex = existingTex;
         if (!tex) {
@@ -4687,6 +4780,57 @@
         const cy = uz * vx - ux * vz;
         const cz = ux * vy - uy * vx;
         return 0.5 * Math.sqrt(cx * cx + cy * cy + cz * cz);
+    }
+    // 按三角形面积给每顶点分配权重,分层(确定性)采样 N 个顶点索引。
+    // 用于蒙皮顶点纹理:让粒子按表面积均匀分布,避免密集顶点区(头/手)过采样导致粒子堆积。
+    // 结果缓存在 mesh 上(pos/idx/weight 三 role 复用同一索引,保证蒙皮数据对齐)。
+    function computeAreaWeightedVertexIndices(mesh, N) {
+        if (!mesh || N <= 0)
+            return null;
+        if (mesh._vfxAWIndices && mesh._vfxAWIndices._N === N)
+            return mesh._vfxAWIndices;
+        const tri = getMeshTriangles(mesh);
+        if (!tri)
+            return null;
+        const positions = tri.positions, indices = tri.indices;
+        const nv = positions.length;
+        if (!nv || indices.length < 3)
+            return null;
+        const vertArea = new Float64Array(nv);
+        for (let t = 0; t + 2 < indices.length; t += 3) {
+            const i0 = indices[t], i1 = indices[t + 1], i2 = indices[t + 2];
+            const a = positions[i0], b = positions[i1], c = positions[i2];
+            if (!a || !b || !c)
+                continue;
+            const ar = _triArea(a, b, c) / 3;
+            vertArea[i0] += ar;
+            vertArea[i1] += ar;
+            vertArea[i2] += ar;
+        }
+        const cum = new Float64Array(nv);
+        let acc = 0;
+        for (let i = 0; i < nv; i++) {
+            acc += vertArea[i];
+            cum[i] = acc;
+        }
+        if (acc <= 0)
+            return null;
+        const out = new Int32Array(N);
+        for (let k = 0; k < N; k++) {
+            const target = ((k + 0.5) / N) * acc;
+            let lo = 0, hi = nv - 1;
+            while (lo < hi) {
+                const mid = (lo + hi) >> 1;
+                if (cum[mid] < target)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
+            out[k] = lo;
+        }
+        out._N = N;
+        mesh._vfxAWIndices = out;
+        return out;
     }
     function _rayTri(ox, oy, oz, dx, dy, dz, a, b, c) {
         const e1x = b.x - a.x, e1y = b.y - a.y, e1z = b.z - a.z;
@@ -5313,6 +5457,21 @@
         setSkinnedMeshSource(name, renderer) {
             this._skinnedMeshSources.set(name, renderer);
             this._skinnedMeshVertexBaked.delete(name);
+            // DEBUG(临时): 绑定时打印 source 信息,确认 renderer/mesh/bones 是否有效
+            try {
+                var _mf = renderer && renderer.owner && renderer.owner.getComponent ? renderer.owner.getComponent(Laya.MeshFilter) : null;
+                var _mesh = _mf && _mf.sharedMesh;
+                var _vc = 0; if (_mesh) { var _pp = []; try { _mesh.getPositions(_pp); } catch (e) {} _vc = _pp.length; }
+                var _ew = this.owner && this.owner.transform ? this.owner.transform.worldMatrix.elements : null;
+                var _rw = renderer && renderer.owner && renderer.owner.transform ? renderer.owner.transform.worldMatrix.elements : null;
+                console.log("[SKIN-DBG] setSkinnedMeshSource name=" + name +
+                    " renderer=" + (!!renderer) +
+                    " owner=" + (renderer && renderer.owner ? renderer.owner.name : "?") +
+                    " meshFilter=" + (!!_mf) + " mesh=" + (!!_mesh) + " vertexCount=" + _vc +
+                    " bones=" + (renderer && renderer.bones ? renderer.bones.length : "undef") +
+                    "\n  发射器(VFX节点)world矩阵=[" + (_ew ? Array.from(_ew).map(v => Number(v).toFixed(2)).join(",") : "?") + "]" +
+                    "\n  角色(SMR owner)world矩阵=[" + (_rw ? Array.from(_rw).map(v => Number(v).toFixed(2)).join(",") : "?") + "]");
+            } catch (e) { console.log("[SKIN-DBG] setSkinnedMeshSource log err", e); }
         }
         clearSkinnedMeshSource(name) {
             this._skinnedMeshSources.delete(name);
@@ -5321,6 +5480,14 @@
             if (tex)
                 tex.destroy();
             this._skinnedMeshBoneTextures.delete(name);
+        }
+        // SkinnedMeshTransform: 注册一个场景节点(骨骼/Transform),其世界矩阵每帧驱动
+        // 对应 transformSource 的粒子位置变换(position = matrix * position),实现跟随动画。
+        setTransformSource(name, node) {
+            this._transformSources.set(name, node);
+        }
+        clearTransformSource(name) {
+            this._transformSources.delete(name);
         }
         setCustomSpawnCallback(name, callback) {
             this._customSpawnCallbacks.set(name, callback);
@@ -5719,14 +5886,18 @@
             this._skinnedMeshSources = new Map();
             this._skinnedMeshBoneTextures = new Map();
             this._skinnedMeshVertexBaked = new Set();
+            // SkinnedMeshTransform: 把场景骨骼/Transform 注册进来,每帧把其世界矩阵绑成
+            // 粒子位置变换矩阵(u_VfxProp_VfxTransform_<name>),让 bolts/sparks 跟随该骨骼动画。
+            this._transformSources = new Map();
             this._invEmitterWorldMatrix = new Laya.Matrix4x4();
             this._propertyValues = new Map();
             this._tmpExprVec4 = new Laya.Vector4();
             this._pause = false;
-            this.initialEvent = "OnPlay";
-        }
-        onStart() {
-            console.log("VisualEffect onStart", this, this.asset);
+            // 不硬编码 "OnPlay"：留空,让资产 initialEventName 当默认(set asset 时 5289 行
+            // `_initialEvent || asset.initialEventName` 用资产值)。硬编码 "OnPlay" 会因 || 短路
+            // 永远顶掉资产的自定义初始事件(如 materialize 的 "in")→ spawn 监听 "in" 永不触发。
+            // 用户 Inspector 手填的 initialEvent 仍经反序列化覆盖,优先级最高。
+            this._initialEvent = "";
         }
         onAwake() {
             var _a, _b;
@@ -6163,6 +6334,10 @@
 
             var _a, _b, _c;
             const state = this.state;
+            // SkinnedMesh 顶点/骨骼纹理必须在 execudeEvents(spawn→initialize compute dispatch)之前烘焙+绑定,
+            // 否则 setPositionMesh 的 initialize compute 读到零纹理 → mat4(0)×p=0 → 粒子全塌原点(swarm clump)。
+            this._updateSkinnedMeshTextures();
+            this._updateTransformSources();
             this.execudeEvents(state);
             for (let system of this.systems) {
                 if (system instanceof VFXSpawnerSystem) {
@@ -6174,7 +6349,6 @@
                     system.update(state, null);
                 }
             }
-            this._updateSkinnedMeshTextures();
             state.emitterWorldMatrix = this.owner.transform.worldMatrix;
             state.emitterWorldMatrix.invert(this._invEmitterWorldMatrix);
             state.invEmitterWorldMatrix = this._invEmitterWorldMatrix;
@@ -6244,21 +6418,29 @@
                     system.outputPhase(state, this.cmd);
                 }
             }
+            this._dbgFrameCount = (this._dbgFrameCount || 0) + 1;
+            const _dbgLog = (this._dbgFrameCount % 30 === 0); // [BOLT-DBG] 每 30 帧统计一次存活粒子数
             for (let system of this.systems) {
                 if (system instanceof VFXParticleSystem) {
                     system.copyBoundsToStaging(this.cmd);
                     system.copyOutputEventsToStaging(this.cmd);
+                    if (_dbgLog)
+                        system.dbgCopyIndirectToStaging(this.cmd);
                 }
             }
             this.cmd.executeCMDs();
             this.cmd.clearCMDs();
+            let _dbgSi = 0;
             for (let system of this.systems) {
                 if (system instanceof VFXParticleSystem) {
                     system.requestBoundsReadback();
                     if (system.outputEventDescs.length > 0) {
                         system.requestOutputEventReadback((eventName, entries) => this._dispatchOutputEvent(eventName, entries));
                     }
+                    if (_dbgLog)
+                        system.dbgRequestIndirectReadback("sys#" + _dbgSi);
                 }
+                _dbgSi++;
             }
             this._evaluateShaderExpressions();
         }
@@ -6463,6 +6645,11 @@
                     continue;
                 const allDatas = system.getAllShaderDatas();
                 for (const tu of textureUniforms) {
+                    // ⭐transformSource 项是 Mat4 uniform(SkinnedMeshTransform/VFXTransform),不是纹理。
+                    //   若在此 setTexture(whiteTexture),会把该 uniform 槽注册成纹理 → _updateTransformSources
+                    //   的 setMatrix4x4 往纹理上 cloneTo 崩(Cannot read 'set' of undefined)。必须跳过。
+                    if (tu.transformSource)
+                        continue;
                     const id = Laya.Shader3D.propertyNameToID(tu.uniformName);
                     let texture = tu.texture;
                     if (!texture) {
@@ -6504,11 +6691,30 @@
         }
         _updateSkinnedMeshTextures() {
             var _a, _b, _c;
-            if (this._skinnedMeshSources.size === 0)
+            // DEBUG(临时): 节流打印,确认烘焙是否被调用/source 是否就绪
+            this._skinDbgN = (this._skinDbgN || 0);
+            const _dbg = this._skinDbgN < 40;
+            if (this._skinnedMeshSources.size === 0) {
+                if (_dbg) { this._skinDbgN++; console.log("[SKIN-DBG] _updateSkinnedMeshTextures: sources=0 (源还没绑,提前return)"); }
                 return;
+            }
             const asset = this.asset;
             if (!asset)
                 return;
+            // DEBUG(临时): 一次性打印 VFX 节点 + 蒙皮源角色的世界坐标/缩放(判断 scale 错位)
+            if (!this._xformDbgDone) {
+                this._xformDbgDone = true;
+                try {
+                    const ot = this.owner.transform;
+                    const op = ot.position, os = ot.getWorldLossyScale ? ot.getWorldLossyScale() : (ot.scale || ot.localScale);
+                    let srcStr = "";
+                    for (const [nm, src] of this._skinnedMeshSources) {
+                        const st = src.owner && src.owner.transform;
+                        if (st) { const sp = st.position; const ss = st.getWorldLossyScale ? st.getWorldLossyScale() : (st.scale || st.localScale); srcStr += ` | src[${nm}] pos(${sp.x.toFixed(2)},${sp.y.toFixed(2)},${sp.z.toFixed(2)}) scale(${ss.x.toFixed(3)},${ss.y.toFixed(3)},${ss.z.toFixed(3)})`; }
+                    }
+                    console.log("[SKIN-DBG] VFX节点 pos(" + op.x.toFixed(2) + "," + op.y.toFixed(2) + "," + op.z.toFixed(2) + ") scale(" + (os?os.x.toFixed(3):"?") + ")" + srcStr);
+                } catch (e) { console.log("[SKIN-DBG] xform dbg err " + e.message); }
+            }
             const descs = asset.systems;
             for (let i = 0; i < this.systems.length; i++) {
                 const system = this.systems[i];
@@ -6521,6 +6727,7 @@
                     if (!tu.skinnedMeshSource)
                         continue;
                     const source = this._skinnedMeshSources.get(tu.skinnedMeshSource);
+                    if (_dbg) { this._skinDbgN++; console.log("[SKIN-DBG] sys" + i + " tu role=" + tu.skinnedMeshRole + " src=" + tu.skinnedMeshSource + " sourceFound=" + (!!source) + " uniform=" + tu.uniformName); }
                     if (!source)
                         continue;
                     const role = tu.skinnedMeshRole;
@@ -6534,6 +6741,7 @@
                         const bakedKey = `${tu.skinnedMeshSource}|${role}`;
                         if (!tu.texture || !this._skinnedMeshVertexBaked.has(bakedKey)) {
                             const mesh = (_c = (_b = (_a = source.owner) === null || _a === void 0 ? void 0 : _a.getComponent) === null || _b === void 0 ? void 0 : _b.call(_a, Laya.MeshFilter)) === null || _c === void 0 ? void 0 : _c.sharedMesh;
+                            if (_dbg) { this._skinDbgN++; console.log("[SKIN-DBG]   bake " + role + " meshFound=" + (!!mesh) + (mesh ? " (将烘焙顶点纹理)" : " ← MeshFilter/sharedMesh 取不到,跳过!")); }
                             if (!mesh)
                                 continue;
                             tu.texture = bakeSkinnedMeshVertexTexture(mesh, role);
@@ -6542,8 +6750,42 @@
                     }
                     const id = Laya.Shader3D.propertyNameToID(tu.uniformName);
                     const allDatas = system.getAllShaderDatas();
+                    if (_dbg) { this._skinDbgN++; console.log("[SKIN-DBG]   setTexture " + tu.uniformName + " tex=" + (!!tu.texture) + " onShaderDatas=" + allDatas.length); }
                     for (const sd of allDatas)
                         sd.setTexture(id, tu.texture);
+                }
+            }
+        }
+        // SkinnedMeshTransform: 每帧把注册节点的世界矩阵绑成 Mat4 uniform(u_VfxProp_VfxTransform_<name>)。
+        // 与 swarm 蒙皮后世界位置同空间(世界),所以直接用节点 worldMatrix;initialize compute 里
+        // position = matrix * position 让 bolts/sparks 跟随该骨骼动画。
+        _updateTransformSources() {
+            if (this._transformSources.size === 0)
+                return;
+            const asset = this.asset;
+            if (!asset)
+                return;
+            const descs = asset.systems;
+            for (let i = 0; i < this.systems.length; i++) {
+                const system = this.systems[i];
+                const desc = descs[i];
+                if (!(system instanceof VFXParticleSystem))
+                    continue;
+                if (!(desc === null || desc === void 0 ? void 0 : desc.textureUniforms))
+                    continue;
+                for (const tu of desc.textureUniforms) {
+                    if (!tu.transformSource)
+                        continue;
+                    const node = this._transformSources.get(tu.transformSource);
+                    if (!node)
+                        continue;
+                    const tr = node.transform || (node.owner && node.owner.transform);
+                    if (!tr)
+                        continue;
+                    const id = Laya.Shader3D.propertyNameToID(tu.uniformName);
+                    const wm = tr.worldMatrix;
+                    for (const sd of system.getAllShaderDatas())
+                        sd.setMatrix4x4(id, wm);
                 }
             }
         }

@@ -107,6 +107,7 @@ function glslTypeToUniformMap(glslType: string | { type: string; [key: string]: 
         if (glslType.type === "Texture3D") return "Texture3D";
         if (glslType.type === "Texture2DArray") return "Texture2DArray";
         if (glslType.type === "TextureCube") return "TextureCube";
+        if (glslType.type === "Mat4") return "Matrix4x4"; // SkinnedMeshTransform 骨骼矩阵
         return "Float";
     }
     switch (glslType) {
@@ -595,6 +596,14 @@ function _collectTextureUniformsFromPropertyMap(propertyUniforms: Map<string, an
                 uuid: String(val.skinnedMeshSource),
                 textureType: `SkinnedMesh_${val.skinnedMeshRole}`,
             });
+        } else if (val && typeof val === "object" && val.type === "Mat4" && val.transformSource) {
+            // SkinnedMeshTransform: 不是纹理,但复用 textureUniforms 通道把 transformSource 元数据带给引擎;
+            // 引擎 _updateTransformSources 每帧把骨骼世界矩阵绑到该 Mat4 uniform(VFXAssetParser 不为其建纹理)
+            textureUniforms.push({
+                uniformName: finalUniformName,
+                uuid: String(val.transformSource),
+                textureType: `Transform`,
+            } as any);
         } else if (val && typeof val === "object" && val.type === "Texture2D" && val.pcacheProp !== undefined) {
             const attr = String(val.pcacheAttr || "position");
             textureUniforms.push({
