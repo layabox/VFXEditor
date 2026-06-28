@@ -538,6 +538,24 @@ const SHAPE_DEFS: Record<string, IShapeDef> = {
     },
 };
 
+// ─── materialize 上扫 (ySweep) ──────────────────────
+// Unity materialize 类特效(如 Patterned/Abrupt DM swarm)的 Circle position 被一个随 spawn 源年龄
+// (sourceAttributes.age)线性动画的 TRS 上扫:圆环高度 = base + height×(sourceAge/duration),粒子留在
+// 各自 spawn 高度 → 形成高度梯度的穹顶/列。转换器把 source-age 驱动的 transform 折成了静态圆,这里据
+// props.ySweep 在 init(u_TotalTime = 当前帧 = spawn 时刻 ≈ sourceAge)重建上扫 + 随机厚度带。
+// 不加则所有粒子堆在同一高度 → 同高度过量叠加 additive HDR → 实心白盘(Patterned Hex 穹顶白根因)。
+function applyYSweep(lines: string[], particleVar: string, p: Record<string, any>, indent: string): void {
+    const sw = p.ySweep as Record<string, any> | undefined;
+    if (!sw || typeof sw !== "object") return;
+    const base = toFloat(sw.base as number, 0);
+    const height = toFloat(sw.height as number, 0);
+    const duration = toFloat(sw.duration as number, 1);
+    const band = toFloat(sw.band as number, 0);
+    lines.push(`${indent}// ySweep: materialize 上扫 (Y 随全局时间线性扫 + 随机厚度带)`);
+    lines.push(`${indent}float _swProg = clamp(u_TotalTime / max(${duration}, 0.001), 0.0, 1.0);`);
+    lines.push(`${indent}_shapePos.y += ${base} + ${height} * _swProg + (Rand(${particleVar}.seed) - 0.5) * ${band};`);
+}
+
 // ─── 主入口 ─────────────────────────────────────────
 
 /**
@@ -616,6 +634,7 @@ export function genSetPositionShapeCode(
             lines.push(`${indent}// setPositionShape: ${shape} (${mode}, compiled)`);
             lines.push(`${indent}{`);
             lines.push(...shapeDef.compiled(compiled.expr, compiled.stmts, particleVar, inner, mode, shapeOpts));
+            applyYSweep(lines, particleVar, p, inner);
             applyComp(lines, particleVar, "position", "_shapePos", posComp, inner);
             applyOrientation(lines, particleVar, p, inner);
             lines.push(`${indent}}`);
@@ -640,6 +659,8 @@ export function genSetPositionShapeCode(
         lines.push(`${inner}_shapeDir = transformDirection(u_EmitterWorldMatrix, _shapeDir);`);
     }
 
+    // materialize 上扫 (ySweep) — 在 composition 写回前偏移 _shapePos.y
+    applyYSweep(lines, particleVar, p, inner);
     // 应用 composition
     applyComp(lines, particleVar, "position", "_shapePos", posComp, inner);
     applyOrientation(lines, particleVar, p, inner);
