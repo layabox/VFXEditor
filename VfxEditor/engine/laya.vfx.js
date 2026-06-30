@@ -3951,11 +3951,14 @@
                                 if (meshPCMatch) {
                                     const pcRole = meshPCMatch[1] === "SurfacePoints" ? "surface" : "volume";
                                     const pointCount = Math.max(16, Math.min(8192, Number(tu.pointCount) || 1024));
+                                    // 顶点缩放:优先用转换器注入的 tu.meshScale(数据驱动);.lvfx 没带时对已知 cm-unit
+                                    // mesh(Ellen.fbx)兜底 0.01;内置 mesh → 1.0(替代旧 ×0.01 硬编码,后者会错误缩小内置 mesh)。
+                                    const meshScale = _resolveMeshScale(Number(tu.meshScale), uuid);
                                     if (uuid.startsWith("builtin:")) {
                                         // 内置 mesh(如 Capsule): 同步生成 + 烘点云,无异步加载(不卡 asset 加载)
                                         const builtinMesh = buildBuiltinMesh(uuid.slice(8));
                                         if (builtinMesh)
-                                            entry.texture = pcRole === "surface" ? bakeMeshSurfacePoints(builtinMesh, pointCount) : bakeMeshVolumePoints(builtinMesh, pointCount);
+                                            entry.texture = pcRole === "surface" ? bakeMeshSurfacePoints(builtinMesh, pointCount, meshScale) : bakeMeshVolumePoints(builtinMesh, pointCount, meshScale);
                                         else
                                             console.warn(`[VFX] setPositionMesh(${pcRole}): unknown builtin mesh ${uuid}`);
                                     } else {
@@ -3963,8 +3966,8 @@
                                     const loadMeshTex = Laya.Laya.loader.load(meshUrl).then((mesh) => {
                                         if (mesh)
                                             entry.texture = pcRole === "surface"
-                                                ? bakeMeshSurfacePoints(mesh, pointCount)
-                                                : bakeMeshVolumePoints(mesh, pointCount);
+                                                ? bakeMeshSurfacePoints(mesh, pointCount, meshScale)
+                                                : bakeMeshVolumePoints(mesh, pointCount, meshScale);
                                         else
                                             console.warn(`[VFX] setPositionMesh(${pcRole}): failed to load mesh ${meshUrl}`);
                                     });
@@ -4016,9 +4019,10 @@
                                     const pcUrl = pcUuid.startsWith("res://") ? pcUuid : "res://" + pcUuid;
                                     const pcRole = String(bu.meshRole || "surfacePoints");
                                     const pcCount = Math.max(16, Math.min(8192, Number(bu.pointCount) || 1024));
+                                    const pcScale = _resolveMeshScale(Number(bu.meshScale), pcUuid);
                                     loadPromises.push(Laya.Laya.loader.load(pcUrl).then((mesh) => {
                                         try {
-                                            if (mesh) mpEntry.buffer = pcRole === "volumePoints" ? bakeMeshVolumePointsBuffer(mesh, pcCount) : bakeMeshSurfacePointsBuffer(mesh, pcCount);
+                                            if (mesh) mpEntry.buffer = pcRole === "volumePoints" ? bakeMeshVolumePointsBuffer(mesh, pcCount, pcScale) : bakeMeshSurfacePointsBuffer(mesh, pcCount, pcScale);
                                             else console.warn("[VFX] setPositionMesh(buffer): failed to load mesh " + pcUrl);
                                         } catch (e) { console.error("[VFX] setPositionMesh bake error:", e); }
                                     }, (err) => { console.warn("[VFX] setPositionMesh load error " + pcUrl, err); }));
@@ -4809,7 +4813,19 @@
         buf.deviceBuffer.setData(data.buffer, 0, 0, count * 16);
         return buf;
     }
-    function _computeSurfacePointsDataB(mesh, count) {
+    // 已知 cm-unit mesh(顶点 100x,Unity fileScale 未应用)的【兜底】缩放表:
+    // 当 .lvfx 没带 meshScale 时(旧编译产物 / 插件更新但 .vfx 未用新编译器重导)仍能把点云缩回
+    // 世界尺度,避免火焰点云 100x 喷到屏幕外。⭐优先用转换器注入的数据驱动 tu.meshScale,此表仅兜底。
+    const MESH_CMUNIT_FALLBACK = { "e38d2d0d-ea52-4bc0-ae3f-09506c2cde20": 0.01 };  // Ellen.fbx (Smoke DM 火焰发射面)
+    function _resolveMeshScale(rawScale, uuid) {
+        if (typeof rawScale === "number" && rawScale > 0 && rawScale !== 1) return rawScale;  // 数据驱动优先
+        if (uuid) {
+            const bare = String(uuid).replace(/^res:\/\//, "").replace(/@.*$/, "");
+            if (MESH_CMUNIT_FALLBACK[bare]) return MESH_CMUNIT_FALLBACK[bare];
+        }
+        return (typeof rawScale === "number" && rawScale > 0) ? rawScale : 1;
+    }
+    function _computeSurfacePointsDataB(mesh, count, scale) {
         const tri = getMeshTriangles(mesh);
         if (!tri || tri.indices.length < 3) return null;
         const positions = tri.positions, indices = tri.indices;
@@ -4824,9 +4840,10 @@
             let u = Math.random(), v = Math.random();
             if (u + v > 1) { u = 1 - u; v = 1 - v; }
             const w = 1 - u - v;
-            data[p * 4] = w * a.x + u * b.x + v * c.x;
-            data[p * 4 + 1] = w * a.y + u * b.y + v * c.y;
-            data[p * 4 + 2] = w * a.z + u * b.z + v * c.z;
+            const _S = (typeof scale === "number" && scale > 0) ? scale : 1; // 顶点缩放(转换器按mesh注入,缺省1.0;cm-unit mesh如Ellen.fbx=0.01)
+            data[p * 4] = (w * a.x + u * b.x + v * c.x) * _S;
+            data[p * 4 + 1] = (w * a.y + u * b.y + v * c.y) * _S;
+            data[p * 4 + 2] = (w * a.z + u * b.z + v * c.z) * _S;
             data[p * 4 + 3] = 1;
         }
         return data;
@@ -4836,16 +4853,16 @@
         for (let i = 0; i < count; i++) data[i * 4 + 3] = 1;
         return data;
     }
-    function bakeMeshSurfacePointsBuffer(mesh, count) {
-        const data = _computeSurfacePointsDataB(mesh, count) || _fallbackPointDataB(count);
+    function bakeMeshSurfacePointsBuffer(mesh, count, scale) {
+        const data = _computeSurfacePointsDataB(mesh, count, scale) || _fallbackPointDataB(count);
         return _makePointBuffer(data, count);
     }
-    function bakeMeshVolumePointsBuffer(mesh, count) {
+    function bakeMeshVolumePointsBuffer(mesh, count, scale) {
         // bundle: 体积用表面近似(swarm 是 Surface 主用例; 源码有完整 volume)
-        const data = _computeSurfacePointsDataB(mesh, count) || _fallbackPointDataB(count);
+        const data = _computeSurfacePointsDataB(mesh, count, scale) || _fallbackPointDataB(count);
         return _makePointBuffer(data, count);
     }
-    function bakeMeshSurfacePoints(mesh, count) {
+    function bakeMeshSurfacePoints(mesh, count, scale) {
         const tri = getMeshTriangles(mesh);
         if (!tri || tri.indices.length < 3) {
             console.warn("[VFX] bakeMeshSurfacePoints: mesh has no triangles, fallback to single point");
@@ -4870,14 +4887,16 @@
                 v = 1 - v;
             }
             const w = 1 - u - v;
-            data[p * 4] = w * a.x + u * b.x + v * c.x;
-            data[p * 4 + 1] = w * a.y + u * b.y + v * c.y;
-            data[p * 4 + 2] = w * a.z + u * b.z + v * c.z;
+            const _S = (typeof scale === "number" && scale > 0) ? scale : 1; // 顶点缩放(转换器按mesh注入,缺省1.0;cm-unit mesh如Ellen.fbx=0.01)
+            data[p * 4] = (w * a.x + u * b.x + v * c.x) * _S;
+            data[p * 4 + 1] = (w * a.y + u * b.y + v * c.y) * _S;
+            data[p * 4 + 2] = (w * a.z + u * b.z + v * c.z) * _S;
             data[p * 4 + 3] = 1;
         }
         return _makePointTexture(data, count);
     }
-    function bakeMeshVolumePoints(mesh, count) {
+    function bakeMeshVolumePoints(mesh, count, scale) {
+        const _VS = (typeof scale === "number" && scale > 0) ? scale : 1; // 顶点缩放(同 surface,缺省1.0)
         const tri = getMeshTriangles(mesh);
         if (!tri || tri.indices.length < 3) {
             console.warn("[VFX] bakeMeshVolumePoints: mesh has no triangles, fallback to single point");
@@ -4931,16 +4950,16 @@
                     crossings++;
             }
             if ((crossings & 1) === 1) {
-                data[written * 4] = px;
-                data[written * 4 + 1] = py;
-                data[written * 4 + 2] = pz;
+                data[written * 4] = px * _VS;
+                data[written * 4 + 1] = py * _VS;
+                data[written * 4 + 2] = pz * _VS;
                 data[written * 4 + 3] = 1;
                 written++;
             }
         }
         if (written === 0) {
             console.warn(`[VFX] bakeMeshVolumePoints: no inside point hit after ${attempts} attempts (mesh non-watertight?), fallback to surface points`);
-            return bakeMeshSurfacePoints(mesh, count);
+            return bakeMeshSurfacePoints(mesh, count, scale);
         }
         for (let i = written; i < count; i++) {
             const src = (i % written) * 4;

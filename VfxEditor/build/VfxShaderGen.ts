@@ -136,7 +136,7 @@ export interface IShaderGenResult {
     /** 本 system 收集到的 Texture2D/Texture3D uniform → texture UUID 映射 */
     textureUniforms?: Array<{ uniformName: string; uuid: string; textureType: string }>;
     /** 本 system 收集到的 StorageBuffer uniform → property name 映射 (mesh 点云走 meshProp 烘焙) */
-    bufferUniforms?: Array<{ uniformName: string; propertyName?: string; meshProp?: string; meshRole?: string; pointCount?: number }>;
+    bufferUniforms?: Array<{ uniformName: string; propertyName?: string; meshProp?: string; meshRole?: string; pointCount?: number; meshScale?: number }>;
 }
 
 /**
@@ -329,7 +329,7 @@ export class VfxShaderGen {
 
         // 收集 StorageBuffer 声明（注入到 GLSL body，不是 uniformMap）
         const storageBufferDecls: string[] = [];
-        const bufferUniforms: Array<{ uniformName: string; propertyName?: string; meshProp?: string; meshRole?: string; pointCount?: number }> = [];
+        const bufferUniforms: Array<{ uniformName: string; propertyName?: string; meshProp?: string; meshRole?: string; pointCount?: number; meshScale?: number }> = [];
         allPropertyUniforms.forEach((val: any, propName: string) => {
             if (val && typeof val === "object" && val.type === "StorageBuffer" && val._bufferProperty) {
                 const bufName = val._rawUniformName as string;
@@ -339,7 +339,7 @@ export class VfxShaderGen {
                 // setPositionMesh 点云: storage buffer + 引擎烘焙(对齐 Unity, 绕开 WebGPU compute 纹理绑定 bug)
                 const bufName = val._rawUniformName as string;
                 storageBufferDecls.push(`buffer ${bufName}Buffer { vec4 data[]; } ${bufName};`);
-                bufferUniforms.push({ uniformName: bufName, meshProp: val._meshBake.meshProp, meshRole: val._meshBake.meshRole, pointCount: val._meshBake.pointCount });
+                bufferUniforms.push({ uniformName: bufName, meshProp: val._meshBake.meshProp, meshRole: val._meshBake.meshRole, pointCount: val._meshBake.pointCount, meshScale: val._meshBake.meshScale });
             }
         });
         const storageBufferCode = storageBufferDecls.length > 0 ? "\n" + storageBufferDecls.join("\n") + "\n" : "";
@@ -589,6 +589,7 @@ function _collectTextureUniformsFromPropertyMap(propertyUniforms: Map<string, an
                 textureType: `Mesh${roleUpper}`,
             };
             if (val.pointCount) entry.pointCount = val.pointCount;
+            if (val.meshScale != null && val.meshScale !== 1) entry.meshScale = val.meshScale;  // 点云顶点缩放(缺省1.0,替代引擎×0.01硬编码)
             textureUniforms.push(entry);
         } else if (val && typeof val === "object" && val.type === "Texture2D" && val.skinnedMeshSource) {
             textureUniforms.push({

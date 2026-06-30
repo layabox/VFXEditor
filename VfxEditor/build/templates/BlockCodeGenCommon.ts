@@ -1455,6 +1455,9 @@ export function genBlockCode(
             const rawMesh = p.mesh;
             const meshUuid = (typeof rawMesh === "string" && rawMesh.trim() && rawMesh !== "0") ? rawMesh : "";
             const pointCount = Math.max(16, Math.min(8192, Number(p.pointCount) || 1024));
+            // mesh 点云顶点缩放(转换器按 mesh fileScale 注入,缺省 1.0):cm-unit/fileScale 未应用的
+            // mesh(Ellen.fbx=0.01 / AlienStatue=0.2)缩回世界尺度;内置 mesh 用 1.0。替代引擎硬编码 ×0.01。
+            const meshScale = Number(p.meshScale) > 0 ? Number(p.meshScale) : 1;
             const meshRole = mode === "Surface" ? "surfacePoints"
                 : mode === "Volume" ? "volumePoints"
                 : "position";
@@ -1466,6 +1469,7 @@ export function genBlockCode(
                     meshProp: meshUuid,
                     meshRole,
                     pointCount,
+                    meshScale,
                 });
             }
             lines.push("");
