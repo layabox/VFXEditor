@@ -324,6 +324,8 @@ export class VfxBlock {
                         showSpaceToggle: true,
                         isConnected: (sid: string) => this._isSlotLinkedByFullId(sid),
                         onRebuild: () => this.requestRebuild(),
+                        // 展开/折叠、[L]/[W] 空间切换：只重建 + 增量重定位连线（不重建连线→不闪）
+                        onExpandToggle: () => this.requestRebuildForExpand(),
                         expandState: this.blockData.props!,
                         startY: rowY,
                         labelX: pad + 8,
@@ -453,8 +455,7 @@ export class VfxBlock {
                 e.stopPropagation();
                 if (!this.blockData.props) this.blockData.props = {};
                 this.blockData.props._space = isWorld ? "Local" : "World";
-                const ctxUI = this._stage?.getContextUI(this._parentContextId);
-                if (ctxUI) ctxUI.rebuildBlocks();
+                this.requestRebuildForExpand();   // 单次重建 + 增量连线重定位（_space 键已被 DataWatcher 守卫跳过）
             }, this);
         }
 
@@ -500,8 +501,7 @@ export class VfxBlock {
                     e.stopPropagation();
                     if (!this.blockData.props) this.blockData.props = {};
                     this.blockData.props._expanded = !this.blockData.props._expanded;
-                    const ctxUI = this._stage?.getContextUI(this._parentContextId);
-                    if (ctxUI) ctxUI.rebuildBlocks();
+                    this.requestRebuildForExpand();   // 单次重建 + 增量连线重定位（_expanded 键已被 DataWatcher 守卫跳过）
                 }, this);
 
                 labelX = 30;
@@ -618,8 +618,7 @@ export class VfxBlock {
                         e.stopPropagation();
                         if (!this.blockData.props) this.blockData.props = {};
                         this.blockData.props._expandedB = !this.blockData.props._expandedB;
-                        const ctxUI = this._stage?.getContextUI(this._parentContextId);
-                        if (ctxUI) ctxUI.rebuildBlocks();
+                        this.requestRebuildForExpand();   // 单次重建 + 增量连线重定位（_expandedB 键已被 DataWatcher 守卫跳过）
                     }, this);
 
                     bLabelX = 30;
@@ -1085,6 +1084,15 @@ export class VfxBlock {
     requestRebuild(): void {
         const ctxUI = this._stage?.getContextUI(this._parentContextId);
         if (ctxUI) ctxUI.rebuildBlocks();
+        // 拓扑可能变化（下拉切 attribute 等）→ 全量刷新连线
+        this._stage?.refreshAllLines();
+    }
+
+    /** 展开/折叠专用：重建内容 + 增量重定位连线（连接拓扑不变，不 dispose/重建连线 → 消除连线闪烁） */
+    requestRebuildForExpand(): void {
+        const ctxUI = this._stage?.getContextUI(this._parentContextId);
+        if (ctxUI) ctxUI.rebuildBlocks();
+        this._stage?.updateLineEndpoints();
     }
 
     /** 根据复合 slotId 查找输入插槽 */

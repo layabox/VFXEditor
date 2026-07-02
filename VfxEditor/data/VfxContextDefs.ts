@@ -178,8 +178,9 @@ export const VFX_CONTEXT_DEFS: IVfxContextTypeDef[] = [
         flowOutputs: [],
         compatibleBlocks: ["setAttribute", "setAttributeCurve", "attributeFromMap", "orient", "cameraFade", "colorOverLife", "alphaOverLife", "connectTarget", "flipbookPlay", "screenSpaceSize"],
         properties: [
-            { name: "shaderName", caption: "Shader Name", type: "string", default: "VFXUnlit" },
-            { name: "shaderRes", caption: "Shader Res", type: "string", default: "" },
+            // shaderName 由 shaderRes(蓝图.bps) 自动派生（= 文件名去扩展），节点图里隐藏，只暴露一个 Shader Graph 选择器（对齐 Unity）
+            { name: "shaderName", caption: "Shader Name", type: "string", default: "VFXUnlit", hidden: "true" },
+            { name: "shaderRes", caption: "Shader Graph", type: "ShaderBlueprint", default: "" },
             BLEND_MODE_PROP,
             UV_MODE_PROP,
             FLIPBOOK_SIZE_PROP,
@@ -202,8 +203,9 @@ export const VFX_CONTEXT_DEFS: IVfxContextTypeDef[] = [
             { name: "mesh", caption: "Mesh", type: "Mesh" },
             // 节点级 Main Texture(独立于 shadergraph)—— 即使清空 Shader Res 也保留,基础材质直接显示纹理。对齐 Unity Output Mesh 的 Main Texture。
             { name: "mainTexture", caption: "Main Texture", type: "Texture2D", default: "" },
-            { name: "shaderName", caption: "Shader Name", type: "string", default: "VFXUnlit" },
-            { name: "shaderRes", caption: "Shader Res", type: "string", default: "" },
+            // shaderName 由 shaderRes(蓝图.bps) 自动派生（= 文件名去扩展），节点图里隐藏，只暴露一个 Shader Graph 选择器（对齐 Unity）
+            { name: "shaderName", caption: "Shader Name", type: "string", default: "VFXUnlit", hidden: "true" },
+            { name: "shaderRes", caption: "Shader Graph", type: "ShaderBlueprint", default: "" },
             BLEND_MODE_PROP,
             { name: "useAlphaClipping", caption: "Use Alpha Clipping", type: "boolean", default: false },
             { name: "alphaThreshold", caption: "Alpha Threshold", type: "number", default: 0.5, min: 0, max: 1, step: 0.01, hidden: "!data.useAlphaClipping" },

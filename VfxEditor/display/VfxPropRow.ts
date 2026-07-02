@@ -195,14 +195,21 @@ export interface IVfxPropRowConfig {
     setData: (v: any) => void;
     /** slot ID 生成器 (Block 用 buildBlockSlotId, Operator 直接用 name) */
     buildSlotId: (propName: string) => string;
+    /** 写同节点的其它属性（如 ShaderBlueprint 选好后联动写 shaderName）；可选 */
+    siblingSet?: (propName: string, value: any) => void;
+    /** 属性标签列宽度（默认 90）。宽节点（Context 输出节点）传更大值让长标签不截断。 */
+    labelWidth?: number;
     /** 是否创建输入 slot */
     hasInputSlot?: boolean;
     /** 是否创建输出 slot */
     hasOutputSlot?: boolean;
     /** 检查某 slot 是否有连线 */
     isConnected?: (slotId: string) => boolean;
-    /** 需要重建 UI 时的回调 */
+    /** 需要重建 UI 时的回调（会重建内容 + 全量刷新连线，用于拓扑可能变化的场景，如下拉切换 attribute） */
     onRebuild?: () => void;
+    /** 展开/折叠、[L]/[W] 空间切换专用回调：只重建内容 + 增量重定位连线（不 dispose/重建连线 → 不闪）。
+     *  这类操作不改变连接拓扑，只是行高/slot 位置变化。未提供时回退到 onRebuild。 */
+    onExpandToggle?: () => void;
     /** 展开状态存储对象（读写 _expand_xxx 键） */
     expandState?: Record<string, any>;
     /** 是否为 spaceable 复合类型显示 [L]/[W] 切换按钮（仅 Block 属性行使用） */
@@ -292,6 +299,10 @@ export function createPropRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
         case "Texture2DArray":
         case "TextureCube":
             return _createAssetRow(cfg);
+        case "ShaderBlueprint":
+            // 蓝图(.bps)引用：显示蓝图文件名(对齐 Unity 的名字引用)，选择器过滤 .bps，
+            // 存储保留 res://uuid 形式(runtime 用 loader.load 加载，必须是可加载 URL)。
+            return _createAssetRow(cfg, { assetType: "ShaderBlueprint", keepResPrefix: true, syncShaderName: true });
         default:
             return _createNumericRow(cfg);
     }
@@ -367,7 +378,7 @@ function _createNumericRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
     const result: IVfxPropRowResult = { height: ROW_HEIGHT, inputSlots: [], outputSlots: [] };
 
     // 标签
-    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY);
+    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY, undefined, cfg.labelWidth);
 
     // 输入 slot
     if (cfg.hasInputSlot) {
@@ -383,7 +394,8 @@ function _createNumericRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
     const slotId = cfg.buildSlotId(propDef.name);
     if (!cfg.isConnected?.(slotId)) {
         const isInt = propDef.type === "int" || propDef.type === "uint";
-        const w = 70;
+        // 宽节点(Context)：数值框填满值列(左缘对齐值列起点)，对齐 Unity；否则固定 70。
+        const w = cfg.labelWidth ? (inputRight - (labelX + cfg.labelWidth + 4)) : 70;
         const input = createNumericInput(parent, inputRight - w, startY + 2, w, 20);
         input.value = cfg.getData() ?? propDef.default ?? 0;
         if (propDef.min != null) input.min = propDef.min;
@@ -404,14 +416,14 @@ function _createStringRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
     const { propDef, parent, startY, labelX, inputRight } = cfg;
     const result: IVfxPropRowResult = { height: ROW_HEIGHT, inputSlots: [], outputSlots: [] };
 
-    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY);
+    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY, undefined, cfg.labelWidth);
 
     if (cfg.hasInputSlot) _addInputSlot(cfg, propDef, startY, result);
     if (cfg.hasOutputSlot) _addOutputSlot(cfg, propDef, startY, result);
 
     const slotId = cfg.buildSlotId(propDef.name);
     if (!cfg.isConnected?.(slotId)) {
-        const w = 110;
+        const w = cfg.labelWidth ? (inputRight - (labelX + cfg.labelWidth + 4)) : 110;
         const input = gui.UIPackage.createWidgetSync("~/ui/basic/Input/TextInput.widget") as gui.TextInput;
         input.setPos(inputRight - w, startY + 2);
         input.setSize(w, 20);
@@ -434,7 +446,7 @@ function _createBooleanRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
     const { propDef, parent, startY, labelX } = cfg;
     const result: IVfxPropRowResult = { height: ROW_HEIGHT, inputSlots: [], outputSlots: [] };
 
-    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY);
+    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY, undefined, cfg.labelWidth);
 
     if (cfg.hasInputSlot) _addInputSlot(cfg, propDef, startY, result);
     if (cfg.hasOutputSlot) _addOutputSlot(cfg, propDef, startY, result);
@@ -462,7 +474,7 @@ function _createLabelOnlyRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
     const { propDef, parent, startY, labelX } = cfg;
     const result: IVfxPropRowResult = { height: ROW_HEIGHT, inputSlots: [], outputSlots: [] };
 
-    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY);
+    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY, undefined, cfg.labelWidth);
 
     if (cfg.hasInputSlot) _addInputSlot(cfg, propDef, startY, result);
     if (cfg.hasOutputSlot) _addOutputSlot(cfg, propDef, startY, result);
@@ -476,9 +488,10 @@ function _createEnumRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
     const { propDef, parent, startY, labelX, inputRight } = cfg;
     const result: IVfxPropRowResult = { height: ROW_HEIGHT, inputSlots: [], outputSlots: [] };
     const options = propDef.enumSource!;
-    const dropW = 120;
+    // 宽节点(Context)：下拉框填满值列，对齐 Unity；否则固定 120。
+    const dropW = cfg.labelWidth ? (inputRight - (labelX + cfg.labelWidth + 4)) : 120;
 
-    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY);
+    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY, undefined, cfg.labelWidth);
 
     // 下拉背景
     const dropBg = new gui.Shape();
@@ -535,7 +548,7 @@ function _createFlagsRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
     const options = propDef.enumSource!;
     const dropW = 120;
 
-    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY);
+    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY, undefined, cfg.labelWidth);
 
     // 下拉背景
     const dropBg = new gui.Shape();
@@ -621,13 +634,13 @@ function _createVecRow(cfg: IVfxPropRowConfig, childDefs: IVfxPropDef[]): IVfxPr
     if (childDefs.length > 0) {
         _addExpandArrow(parent, labelX, startY, expanded, () => {
             if (cfg.expandState) cfg.expandState[expandKey] = !cfg.expandState[expandKey];
-            cfg.onRebuild?.();
+            (cfg.onExpandToggle ?? cfg.onRebuild)?.();
         }, expandKey, cfg);
     }
 
     // 标签（展开箭头占 16px）
     const actualLabelX = childDefs.length > 0 ? labelX + 16 : labelX;
-    _addLabel(parent, propDef.caption ?? propDef.name, actualLabelX, startY);
+    _addLabel(parent, propDef.caption ?? propDef.name, actualLabelX, startY, undefined, cfg.labelWidth);
 
     // 主行水平分量编辑器（未连接时显示）
     if (!mainConnected) {
@@ -638,11 +651,19 @@ function _createVecRow(cfg: IVfxPropRowConfig, childDefs: IVfxPropDef[]): IVfxPr
         }
 
         const vals = cfg.getData() ?? {};
+        // 宽节点(Context 传了 labelWidth)：按可用值区宽度加宽每个分量输入框，避免 x/y/z/w 显示不全。
+        let fieldWOverride: number | undefined;
+        if (cfg.labelWidth) {
+            const count = vecCfg.labels.length;
+            const avail = inputRight - labelX - cfg.labelWidth - 8;
+            const fw = Math.floor(avail / count) - VEC_LABEL_W - VEC_GAP;
+            fieldWOverride = Math.max(vecCfg.fieldW, Math.min(fw, 120));
+        }
         createVecNumericFields(
             parent, propDef.type, inputRight, startY,
             (c) => vals[c] ?? 0,
             (c, v) => { const cur = cfg.getData() ?? {}; cur[c] = v; cfg.setData(cur); },
-            { skipComps: linkedComps.size > 0 ? linkedComps : undefined, min: propDef.min },
+            { skipComps: linkedComps.size > 0 ? linkedComps : undefined, min: propDef.min, fieldW: fieldWOverride },
         );
     }
 
@@ -711,7 +732,7 @@ function _createCompositeRow(cfg: IVfxPropRowConfig, childDefs: IVfxPropDef[]): 
     }, expandKey, cfg);
 
     // 标签
-    _addLabel(parent, propDef.caption ?? propDef.name, labelX + 16, startY);
+    _addLabel(parent, propDef.caption ?? propDef.name, labelX + 16, startY, undefined, cfg.labelWidth);
 
     // [L]/[W] 空间切换按钮（spaceable 复合类型，仅顶层 block 属性行）
     if (cfg.showSpaceToggle && (cfg.indent || 0) === 0 && isSpaceableType(propDef.type) && cfg.expandState) {
@@ -743,7 +764,7 @@ function _createCompositeRow(cfg: IVfxPropRowConfig, childDefs: IVfxPropDef[]): 
             if (e.input.button !== 0) return;
             e.stopPropagation();
             cfg.expandState![spaceKey] = isWorld ? "Local" : "World";
-            cfg.onRebuild?.();
+            (cfg.onExpandToggle ?? cfg.onRebuild)?.();
         });
     }
 
@@ -850,7 +871,7 @@ function _createSpaceableVecRow(cfg: IVfxPropRowConfig, childDef: IVfxPropDef): 
             if (e.input.button !== 0) return;
             e.stopPropagation();
             cfg.expandState![spaceKey] = isWorld ? "Local" : "World";
-            cfg.onRebuild?.();
+            (cfg.onExpandToggle ?? cfg.onRebuild)?.();
         });
     }
 
@@ -859,18 +880,27 @@ function _createSpaceableVecRow(cfg: IVfxPropRowConfig, childDef: IVfxPropDef): 
 
 // ─── 内部：资源行 ────────────────────────────────────
 
-function _createAssetRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
+function _createAssetRow(cfg: IVfxPropRowConfig, opts?: { assetType?: string; keepResPrefix?: boolean; syncShaderName?: boolean }): IVfxPropRowResult {
     const { propDef, parent, startY, labelX, inputRight, containerWidth } = cfg;
     const result: IVfxPropRowResult = { height: ROW_HEIGHT, inputSlots: [], outputSlots: [] };
 
-    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY);
+    // 把存储值（可能是 "res://uuid" / "res://uuid@lmN" / 裸 uuid）归一化成裸 uuid，用于 assetDb 查询显示名。
+    const toBareUuid = (v: string): string => {
+        if (!v) return "";
+        let u = v.startsWith("res://") ? v.slice("res://".length) : v;
+        const at = u.indexOf("@");
+        if (at >= 0) u = u.slice(0, at);
+        return u;
+    };
+
+    _addLabel(parent, propDef.caption ?? propDef.name, labelX, startY, undefined, cfg.labelWidth);
 
     if (cfg.hasInputSlot) _addInputSlot(cfg, propDef, startY, result);
     if (cfg.hasOutputSlot) _addOutputSlot(cfg, propDef, startY, result);
 
     const slotId = cfg.buildSlotId(propDef.name);
     if (!cfg.isConnected?.(slotId)) {
-        const valueX = labelX + 94;
+        const valueX = labelX + (cfg.labelWidth ?? 90) + 4;
         const vbW = inputRight - valueX;
 
         // 值背景（圆角深色条）
@@ -902,19 +932,21 @@ function _createAssetRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
         arrow.style.align = gui.AlignType.Right;
         valueBg.addChild(arrow);
 
-        // 显示当前资源名
+        // 显示当前资源名。ShaderBlueprint(keepResPrefix) 时把 res://uuid 归一化成裸 uuid 再查（.bps 无子资源）；
+        // mesh/纹理保持原逻辑（可能带 @lmN 子资源，直接交给 assetDb 解析出子资源名）。
         const curId = cfg.getData() as string || "";
-        const updateLabel = async (assetId: string) => {
-            if (!assetId) { valueLabel.text = "None"; return; }
+        const updateLabel = async (rawVal: string) => {
+            const lookup = opts?.keepResPrefix ? toBareUuid(rawVal) : rawVal;
+            if (!lookup) { valueLabel.text = "None"; return; }
             try {
-                const info = await (Editor as any).assetDb.getAsset(assetId);
-                valueLabel.text = info ? info.fileName : assetId;
-            } catch { valueLabel.text = assetId; }
+                const info = await (Editor as any).assetDb.getAsset(lookup);
+                valueLabel.text = info ? info.fileName : lookup;
+            } catch { valueLabel.text = lookup; }
         };
         updateLabel(curId);
 
         // 点击打开资源选择对话框
-        const assetType = propDef.type;
+        const assetType = opts?.assetType ?? propDef.type;
         valueBg.on("pointer_down", async (e: gui.Event) => {
             if (e.input.button !== 0) return;
             e.stopPropagation();
@@ -924,8 +956,22 @@ function _createAssetRow(cfg: IVfxPropRowConfig): IVfxPropRowResult {
             dlg.contentPane.on("submit", (evt: gui.Event) => {
                 const asset = evt.data;
                 if (asset) {
-                    cfg.setData(asset.id);
-                    updateLabel(asset.id);
+                    // keepResPrefix：runtime 需可加载 URL（loader.load），存成 res://uuid；
+                    // asset.id 若已是 res:// 形式则原样保留。
+                    let stored = asset.id as string;
+                    if (opts?.keepResPrefix && stored && !stored.startsWith("res://")) stored = "res://" + stored;
+                    cfg.setData(stored);
+                    updateLabel(stored);
+                    // ShaderBlueprint：选好蓝图后把同节点隐藏的 shaderName 联动成 .bps 文件名（去扩展），
+                    // build/runtime 仍读 shaderName，UI 上只暴露这一个 Shader Graph 选择器（对齐 Unity）。
+                    if (opts?.keepResPrefix && opts.syncShaderName && cfg.siblingSet) {
+                        (async () => {
+                            let nm = (asset.fileName as string) || "";
+                            if (!nm) { try { const info = await (Editor as any).assetDb.getAsset(toBareUuid(stored)); nm = info ? info.fileName : ""; } catch { } }
+                            nm = (nm || "").replace(/\.bps$/i, "");
+                            if (nm) cfg.siblingSet!("shaderName", nm);
+                        })();
+                    }
                 }
             });
         }, cfg);
@@ -960,11 +1006,12 @@ export function createVecNumericFields(
     rowY: number,
     getValue: (comp: string) => number,
     setValue: (comp: string, v: number) => void,
-    options?: { skipComps?: Set<string>; min?: number },
+    options?: { skipComps?: Set<string>; min?: number; fieldW?: number },
 ): NumericInput[] {
     const cfg = VEC_CONFIGS[vecType];
     if (!cfg) return [];
-    const { labels, fieldW } = cfg;
+    const { labels } = cfg;
+    const fieldW = options?.fieldW ?? cfg.fieldW;
     const count = labels.length;
     const cellW = VEC_LABEL_W + fieldW + VEC_GAP;
     const inputs: NumericInput[] = [];
@@ -994,14 +1041,14 @@ export function createVecNumericFields(
 }
 
 /** 添加文字标签 */
-function _addLabel(parent: gui.Widget, text: string, x: number, y: number, color: number = LABEL_COLOR): gui.TextField | null {
+function _addLabel(parent: gui.Widget, text: string, x: number, y: number, color: number = LABEL_COLOR, width: number = 90): gui.TextField | null {
     if (!text) return null;
     const lbl = new gui.TextField();
     lbl.text = text;
     lbl.style.fontSize = LABEL_FONT;
     lbl.color = color;
     lbl.setPos(x, y + 4);
-    lbl.setSize(90, 18);
+    lbl.setSize(width, 18);
     parent.addChild(lbl);
     return lbl;
 }

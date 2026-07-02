@@ -21,7 +21,9 @@ import { VfxI18n } from "../i18n";
  *              SpawnEvent                   ← 标签在 bg 下沿
  */
 export class VfxContext extends gui.Widget {
-    static CTX_WIDTH = 240;
+    static CTX_WIDTH = 420;
+    /** 属性标签列宽度（宽节点让长属性名不截断，对齐 Unity 左侧说明完整显示） */
+    static LABEL_W = 160;
     static HEADER_HEIGHT = 28;
     static FLOW_OVERHANG = 20;
 
@@ -50,6 +52,10 @@ export class VfxContext extends gui.Widget {
     /** 已加载材质属性的 shaderRes（避免重复加载；变了才重读） */
     private _matPropsLoadedKey: string = "";
     private _isRebuilding: boolean = false;
+    /** 双缓冲：上一次重建残留的旧内容清理回调（延迟到新内容绘制后再移除，消除重建裸帧闪烁） */
+    private _pendingCleanup: (() => void) | null = null;
+    /** _recalcSize 期间是否保留旧 _bg（双缓冲时旧 bg 由延迟清理统一移除） */
+    private _keepOldBg: boolean = false;
     /** 类级重建深度：任何 context 重建期间，DataWatcher 通知一律不再级联。
      *  实例级 _isRebuilding 只能挡自己重入；createDefaultUI 回填缺失属性默认值的写入
      *  会经 _onDataChange → stage.refreshAllLines 重建其他 context，跨 context 级联爆炸。
@@ -183,44 +189,74 @@ export class VfxContext extends gui.Widget {
         if (this._isRebuilding) return;
         this._isRebuilding = true;
         VfxContext._anyRebuildDepth++;
+
+        // 双缓冲：上一代的延迟清理【不能】在这里同步执行——同一任务内连发两次 rebuild 时（如
+        // setAttribute 展开箭头：props 写入触发 DataWatcher rebuild#1 + handler 显式 rebuild#2），
+        // 同步执行会把唯一已绘制的旧代拆掉，而新代 Shape/文字都是延迟绘制 → 整节点裸帧。
+        // 改为把上一代清理【合并】进本代清理，统一延迟到新内容绘制之后。
+        const prevCleanup = this._pendingCleanup;
+        this._pendingCleanup = null;
+
+        const oldBlocks = this._blocks;
+        const oldFlowOutRow = this._flowOutRow;
+        const oldFlowOutSlots = this._flowOutSlots;
+        const oldShaderPropRow = this._shaderPropRow;
+        const oldShaderPropSlots = this._shaderPropSlots;
+        const oldPropRowWidgets = this._propRowWidgets;
+        const oldBg = this._bg;
+
+        // 换成全新数组让 _rebuildBlocksInner 往里填新内容（此时【不】移除/销毁旧内容）
+        this._blocks = [];
+        this._flowOutSlots = [];
+        this._shaderPropSlots = [];
+        this._propRowWidgets = [];
+        this._flowOutRow = null;
+        this._shaderPropRow = null;
+        this._keepOldBg = true;
+
         try {
-        this._rebuildBlocksInner(startY);
+            this._rebuildBlocksInner(startY);
         } finally {
+            this._keepOldBg = false;
             this._isRebuilding = false;
             VfxContext._anyRebuildDepth--;
         }
+
+        // 新代先隐身(alpha=0，style.opacity 立即生效、不影响布局/连线端点计算)：
+        // 新代的 Shape 背景/TextField 字号排版都走 Timers.callLater 延迟一帧才定型，
+        // 这一帧若可见会以"默认大字号裸文字 + 无框输入"叠在旧代上(文字放大重影 bug)。
+        // 有旧代可垫时才隐身；初次构建(无旧代)保持原行为，避免节点出现延迟。
+        const hasOld = oldBlocks.length > 0 || oldPropRowWidgets.length > 0 || !!oldBg;
+        const newWidgets: gui.Widget[] = [];
+        if (hasOld) {
+            for (const b of this._blocks) { if (b.ui) newWidgets.push(b.ui); }
+            for (const w of this._propRowWidgets) newWidgets.push(w);
+            if (this._flowOutRow) newWidgets.push(this._flowOutRow);
+            if (this._shaderPropRow) newWidgets.push(this._shaderPropRow);
+            if (this._bg && this._bg !== oldBg) newWidgets.push(this._bg);
+            for (const w of newWidgets) w.alpha = 0;
+        }
+
+        // 旧内容(已绘制)保留 1~2 帧；新代样式定型后原子换帧：新代显形 + 旧代移除（同一同步块，帧间无裸/无重影）。
+        const cleanup = () => {
+            for (const w of newWidgets) w.alpha = 1;                    // 新代显形（先显后拆，原子换帧）
+            if (prevCleanup) { try { prevCleanup(); } catch (_) { } }   // 连发 rebuild 合并的更早一代
+            for (const b of oldBlocks) { if (b.ui && b.ui.parent) b.ui.parent.removeChild(b.ui); b.dispose(); }
+            if (oldFlowOutRow && oldFlowOutRow.parent) oldFlowOutRow.parent.removeChild(oldFlowOutRow);
+            for (const s of oldFlowOutSlots) s.dispose();
+            if (oldShaderPropRow && oldShaderPropRow.parent) oldShaderPropRow.parent.removeChild(oldShaderPropRow);
+            for (const s of oldShaderPropSlots) s.dispose();
+            for (const w of oldPropRowWidgets) { if (w.parent) w.parent.removeChild(w); }
+            if (oldBg && oldBg !== this._bg && oldBg.parent) oldBg.parent.removeChild(oldBg);
+        };
+        this._pendingCleanup = cleanup;
+        const raf: (cb: () => void) => void = (typeof requestAnimationFrame !== "undefined")
+            ? (cb) => requestAnimationFrame(cb) : (cb) => setTimeout(cb, 16);
+        raf(() => raf(() => { if (this._pendingCleanup === cleanup) { this._pendingCleanup = null; cleanup(); } }));
     }
 
     private _rebuildBlocksInner(startY?: number): void {
-        // 清旧 Block UI
-        for (const b of this._blocks) {
-            if (b.ui && b.ui.parent) b.ui.parent.removeChild(b.ui);
-            b.dispose();
-        }
-        this._blocks.length = 0;
-
-        // 清旧 Flow 输出
-        if (this._flowOutRow && this._flowOutRow.parent) {
-            this._flowOutRow.parent.removeChild(this._flowOutRow);
-        }
-        for (const s of this._flowOutSlots) s.dispose();
-        this._flowOutSlots.length = 0;
-        this._flowOutRow = null;
-
-        // 清旧 shader-property 端口
-        if (this._shaderPropRow && this._shaderPropRow.parent) {
-            this._shaderPropRow.parent.removeChild(this._shaderPropRow);
-        }
-        for (const s of this._shaderPropSlots) s.dispose();
-        this._shaderPropSlots.length = 0;
-        this._shaderPropRow = null;
-
-        // 清旧属性行
-        for (const w of this._propRowWidgets) {
-            if (w.parent) w.parent.removeChild(w);
-        }
-        this._propRowWidgets.length = 0;
-
+        // 注意：旧内容的移除/销毁已移交给 rebuildBlocks 的双缓冲延迟清理，这里【不】清理旧内容。
         const W = VfxContext.CTX_WIDTH;
         let yOffset = startY ?? this._getBlocksStartY();
 
@@ -247,7 +283,12 @@ export class VfxContext extends gui.Widget {
                     // 包 runFieldEdit：纯值编辑不触发整 context 重建(防一帧撕裂闪烁)。结构性变更另由 onRebuild 显式重建。
                     setData: (v: any) => { this._stage.runFieldEdit(() => { this.contextData.props![propName] = v; }); },
                     buildSlotId: (name: string) => name,
+                    labelWidth: VfxContext.LABEL_W,
+                    // 让 ShaderBlueprint 选择器选好后能联动写同节点的 shaderName（隐藏行）
+                    siblingSet: (n: string, v: any) => { this._stage.runFieldEdit(() => { this.contextData.props![n] = v; }); },
                     onRebuild: () => { this.rebuildBlocks(); this._stage.refreshAllLines(); },
+                    // 展开/折叠：只重建 + 增量重定位连线（不重建连线→不闪）
+                    onExpandToggle: () => { this.rebuildBlocks(); this._stage.updateLineEndpoints(); },
                     expandState: this.contextData.props!,
                     startY: yOffset,
                     labelX: 10,
@@ -348,7 +389,9 @@ export class VfxContext extends gui.Widget {
                 getData: () => this._getMatPropValue(mp),
                 setData: (v: any) => { if (!animated) this._setMatPropValue(mp, v); },
                 buildSlotId: (name: string) => name,
+                labelWidth: VfxContext.LABEL_W,
                 onRebuild: () => { this.rebuildBlocks(); this._stage.refreshAllLines(); },
+                onExpandToggle: () => { this.rebuildBlocks(); this._stage.updateLineEndpoints(); },
                 expandState: this.contextData.props!,
                 startY: yOffset,
                 labelX: 10,
@@ -586,7 +629,8 @@ export class VfxContext extends gui.Widget {
         const W = VfxContext.CTX_WIDTH;
         const bgH = bgBottomY - this._bgY;
 
-        if (this._bg && this._bg.parent) {
+        // 双缓冲期间保留旧 bg（由延迟清理统一移除），否则立即移除旧 bg
+        if (this._bg && this._bg.parent && !this._keepOldBg) {
             this._bg.parent.removeChild(this._bg);
         }
         this._bg = new gui.Shape();
@@ -827,6 +871,12 @@ export class VfxContext extends gui.Widget {
 
         // props 变化 → 统一重建属性行
         if (target === this.contextData.props) {
+            // 展开/折叠、[L]/[W] 空间切换等纯 UI 状态键（_expand_*/_expanded/_expandedB/_space*）由控件
+            // 自身显式重建，这里不能再重建一次：否则同一任务内二次拆建 → 裸帧闪烁。
+            // 只有真正的数据属性变化才走这里重建。
+            if (typeof key === "string" && (key.indexOf("_expand") === 0 || key.indexOf("_space") === 0)) {
+                return;
+            }
             this.rebuildBlocks();
             this._stage.refreshAllLines();
             return;
@@ -835,6 +885,12 @@ export class VfxContext extends gui.Widget {
         // Block props 变化（如 setAttribute 的 attribute/source）
         for (const bd of this.contextData.blocks) {
             if (target === bd.props) {
+                // 同上：Block 属性行/setAttribute 专属 UI 的展开折叠、[L]/[W] 空间切换
+                // （_expand_*/_expanded/_expandedB/_space*）由 Block 自身显式重建，这里跳过，
+                // 避免同一任务内二次拆建 → 裸帧闪烁（setAttribute 展开箭头写 _expanded 正是此路径）。
+                if (typeof key === "string" && (key.indexOf("_expand") === 0 || key.indexOf("_space") === 0)) {
+                    return;
+                }
                 this.rebuildBlocks();
                 this._stage.refreshAllLines();
                 return;
@@ -945,6 +1001,8 @@ export class VfxContext extends gui.Widget {
     // ---- 清理 ----
 
     dispose(): void {
+        // 先执行残留的双缓冲延迟清理，避免旧内容泄漏
+        if (this._pendingCleanup) { const c = this._pendingCleanup; this._pendingCleanup = null; try { c(); } catch (_) { } }
         if (this.contextData) {
             IEditor.DataWatcher.removeListener(this.contextData, this._onDataChange, this);
         }
