@@ -946,6 +946,11 @@ export const VFX_BLOCK_DEFS: IVfxBlockTypeDef[] = [
             { name: "axes", caption: "Axes", type: "string", enumSource: ["XY", "XZ", "YX", "YZ", "ZX", "ZY"], default: "ZY", hidden: "data.mode !== 'Advanced'" },
             { name: "customAxisA", caption: "Primary Axis", type: "vector", default: { x: 0, y: 0, z: 1 }, hidden: "data.mode !== 'Advanced'" },
             { name: "customAxisB", caption: "Secondary Axis", type: "vector", default: { x: 0, y: 1, z: 0 }, hidden: "data.mode !== 'Advanced'" },
+            // Advanced 逐粒子轴来源：static=用 customAxis 字面量；velocity=粒子速度；position=径向法线 normalize(position - center)。
+            { name: "axisSourceA", caption: "Primary Source", type: "string", enumSource: ["static", "velocity", "position"], default: "static", hidden: "data.mode !== 'Advanced'" },
+            { name: "axisSourceB", caption: "Secondary Source", type: "string", enumSource: ["static", "velocity", "position"], default: "static", hidden: "data.mode !== 'Advanced'" },
+            { name: "axisCenterA", caption: "Primary Center", type: "position", default: { x: 0, y: 0, z: 0 }, hidden: "data.axisSourceA !== 'position'" },
+            { name: "axisCenterB", caption: "Secondary Center", type: "position", default: { x: 0, y: 0, z: 0 }, hidden: "data.axisSourceB !== 'position'" },
         ],
     },
 

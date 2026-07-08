@@ -284,30 +284,77 @@ function genOrientCode(block: IVfxBlockData, attrNames: Set<string>, indent: str
             break;
         }
         case "Advanced": {
-            // User specifies primary + secondary axes; derive third via cross product
+            // 主轴(axes[0]) + 次轴(axes[1])，第三轴由叉乘推导。
+            // 两轴可以是「静态字面量」(customAxisA/B)，也可以是「逐粒子来源」(axisSourceA/B):
+            //   "velocity" → 粒子速度; "position" → 径向法线 normalize(position - axisCenter)。
+            // 例：OrientAdvanced 模板 axes="ZY"，AxisZ(主)=径向法线、AxisY(次)=velocity。
             const axes = (p.axes as string) || "ZY";
+            const primary = axes[0];   // immutable axis
+            const secondary = axes[1]; // used to derive third
+            const all = "XYZ";
+            const third = all.replace(primary, "").replace(secondary, "");
+
             const axisA = toVec3Literal(unwrapSpaceable(p.customAxisA, "vector"));
             const axisB = toVec3Literal(unwrapSpaceable(p.customAxisB, "vector"));
             const axisASpace = (p._space_customAxisA as string) || "Local";
             const axisBSpace = (p._space_customAxisB as string) || "Local";
-            const primary = axes[0]; // immutable axis
-            const secondary = axes[1]; // used to derive third
-            // Determine the third axis letter
-            const all = "XYZ";
-            const third = all.replace(primary, "").replace(secondary, "");
-            // Convert axes from World to Local if needed (vector type: mat3 rotation+scale)
-            const primaryExpr = axisASpace === "World" ? `mat3(u_InvEmitterWorldMatrix) * ${axisA}` : axisA;
-            const secondaryExpr = axisBSpace === "World" ? `mat3(u_InvEmitterWorldMatrix) * ${axisB}` : axisB;
-            // primary is fixed, derive third = cross(primary, secondary), re-derive secondary = cross(third, primary)
-            lines.push(`${indent}vec3 _primary = normalize(${primaryExpr});`);
-            lines.push(`${indent}vec3 _secondaryIn = normalize(${secondaryExpr});`);
-            lines.push(`${indent}vec3 _third = normalize(cross(_primary, _secondaryIn));`);
-            lines.push(`${indent}vec3 _secondary = cross(_third, _primary);`);
-            // Map to orientX/Y/Z
+            const srcA = (p.axisSourceA as string) || "static"; // 主轴来源
+            const srcB = (p.axisSourceB as string) || "static"; // 次轴来源
+            const perParticle = srcA !== "static" || srcB !== "static";
+
+            if (!perParticle) {
+                // ── 旧路径：两轴均为静态字面量 ──
+                const primaryExpr = axisASpace === "World" ? `mat3(u_InvEmitterWorldMatrix) * ${axisA}` : axisA;
+                const secondaryExpr = axisBSpace === "World" ? `mat3(u_InvEmitterWorldMatrix) * ${axisB}` : axisB;
+                lines.push(`${indent}vec3 _primary = normalize(${primaryExpr});`);
+                lines.push(`${indent}vec3 _secondaryIn = normalize(${secondaryExpr});`);
+                lines.push(`${indent}vec3 _third = normalize(cross(_primary, _secondaryIn));`);
+                lines.push(`${indent}vec3 _secondary = cross(_third, _primary);`);
+                const mapping: Record<string, string> = {};
+                mapping[primary] = "_primary";
+                mapping[secondary] = "_secondary";
+                mapping[third] = "_third";
+                lines.push(`${indent}vec3 _orientX = ${mapping["X"]};`);
+                lines.push(`${indent}vec3 _orientY = ${mapping["Y"]};`);
+                lines.push(`${indent}vec3 _orientZ = ${mapping["Z"]};`);
+                break;
+            }
+
+            // ── 逐粒子路径：严格套 Unity Orient.cs Advanced 数学 ──
+            //   axis[primary]   = normalize(P)
+            //   axis[third]     = normalize(cross(S, P))            // Unity: axisX = cross(AxisY, AxisZ)
+            //   axis[secondary] = cross(axis[primary], axis[third]) // Unity: axisY = cross(axisZ, axisX)
+            // 与已验证的 "Along Velocity" ZY 分支同源公式（cross 的 LHS/RHS 符号差异由 axisMat→四元数一致吸收）。
+            const velLocal = () => {
+                const vel = attrNames.has("velocity") ? "p.velocity" : "vec3(0.0, 1.0, 0.0)";
+                return (isWorld && attrNames.has("velocity")) ? `mat3(u_InvEmitterWorldMatrix) * ${vel}` : vel;
+            };
+            const centerA = toVec3Literal(unwrapSpaceable(p.axisCenterA, "position"));
+            const centerB = toVec3Literal(unwrapSpaceable(p.axisCenterB, "position"));
+            const resolve = (src: string, staticLit: string, staticSpace: string, center: string): string => {
+                if (src === "velocity") return velLocal();
+                if (src === "position") return `(${pos} - ${center})`; // 径向法线 = position - center
+                return staticSpace === "World" ? `mat3(u_InvEmitterWorldMatrix) * ${staticLit}` : staticLit;
+            };
+            const Pexpr = resolve(srcA, axisA, axisASpace, centerA); // 主轴 axes[0]
+            const Sexpr = resolve(srcB, axisB, axisBSpace, centerB); // 次轴 axes[1]
+            lines.push(`${indent}vec3 _pIn = ${Pexpr};`);
+            lines.push(`${indent}vec3 _sIn = ${Sexpr};`);
+            lines.push(`${indent}float _pLen = length(_pIn);`);
+            lines.push(`${indent}vec3 _oPrimary = (_pLen > 1e-5) ? _pIn / _pLen : vec3(0.0, 0.0, 1.0);`);
+            // ⚠先归一化次轴(如 velocity)：对齐 Unity normalize(cross(AxisY,AxisZ)) 语义——
+            //   即使 velocity 接近径向/幅值很小，其微小垂直分量也被 normalize 放大成完整 tip 方向。
+            //   否则按 cross 绝对长度判阈会把这些粒子误落到 world-up 兜底 → 三角尖全部朝上、失去随机。
+            lines.push(`${indent}float _sLen = length(_sIn);`);
+            lines.push(`${indent}vec3 _sDir = (_sLen > 1e-5) ? _sIn / _sLen : vec3(0.0, 1.0, 0.0);`);
+            lines.push(`${indent}vec3 _cx = cross(_sDir, _oPrimary);`);
+            lines.push(`${indent}float _cxLen = length(_cx);`);   // = sin(夹角) ∈ [0,1]
+            lines.push(`${indent}vec3 _oThird = (_cxLen > 1e-4) ? _cx / _cxLen : normalize(cross(vec3(0.0, 1.0, 0.0), _oPrimary));`);
+            lines.push(`${indent}vec3 _oSecondary = cross(_oPrimary, _oThird);`);
             const mapping: Record<string, string> = {};
-            mapping[primary] = "_primary";
-            mapping[secondary] = "_secondary";
-            mapping[third] = "_third";
+            mapping[primary] = "_oPrimary";
+            mapping[third] = "_oThird";
+            mapping[secondary] = "_oSecondary";
             lines.push(`${indent}vec3 _orientX = ${mapping["X"]};`);
             lines.push(`${indent}vec3 _orientY = ${mapping["Y"]};`);
             lines.push(`${indent}vec3 _orientZ = ${mapping["Z"]};`);
