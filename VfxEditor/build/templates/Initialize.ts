@@ -8,7 +8,7 @@ import { blocksNeedSeed, genBlockCode } from "./BlockCodeGenCommon";
 const INIT_BLOCK_OPTS = { particleVar: "particle", supportSource: true, includeShape: true } as const;
 
 export function generateInitialize(shaderName: string, common: string, blocks: IVfxBlockData[], attrNames?: Set<string>, triggerEvents?: ITriggerEventInfo[], contextId?: number, compiler?: VfxExprCompiler, simulateSpace?: string, useStripRingBuffer?: boolean, hasSourceAttrs?: boolean, operators?: { typeId: string }[], sourceAttrNames?: Set<string>): string {
-    const blockCode = genBlockCode(blocks, INIT_BLOCK_OPTS, contextId, compiler, simulateSpace);
+    const blockCode = genBlockCode(blocks, { ...INIT_BLOCK_OPTS, hasStripIndex: !!useStripRingBuffer }, contextId, compiler, simulateSpace);
     // needSource: init 块直接 setAttribute(source=Source) 或者 op 链有 getAttribute(location=Source)
     // 让 src.<attr> 引用前先声明 SourceEventData src
     const needSource = blocks.some(b => b.enabled && b.typeId === "setAttribute" && b.props?.source === "Source")

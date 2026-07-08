@@ -278,6 +278,8 @@ export interface IGenBlockCodeOptions {
     sourceUnavailableComment?: string;
     /** 是否处理 setPositionShape block（Output 为 false） */
     includeShape?: boolean;
+    /** 系统是否 strip(useStripRingBuffer)。传给 setPositionShape 的 perStripRand:非 strip 退化用 spawnIndex。 */
+    hasStripIndex?: boolean;
 }
 
 /**
@@ -292,7 +294,7 @@ export function genBlockCode(
     simulateSpace?: string,
 ): string {
     if (!blocks?.length) return "";
-    const { particleVar, supportSource, sourceUnavailableComment, includeShape = true } = opts;
+    const { particleVar, supportSource, sourceUnavailableComment, includeShape = true, hasStripIndex } = opts;
 
     const lines: string[] = [];
 
@@ -301,7 +303,7 @@ export function genBlockCode(
         if (includeShape && block.typeId === "setPositionShape") {
             if (!block.enabled) continue;
             lines.push("");
-            lines.push(...genSetPositionShapeCode(block, particleVar, "    ", simulateSpace, contextId, compiler));
+            lines.push(...genSetPositionShapeCode(block, particleVar, "    ", simulateSpace, contextId, compiler, hasStripIndex));
             continue;
         }
 
@@ -595,10 +597,12 @@ export function genBlockCode(
                 lines.push("");
                 lines.push(`    // setPositionShape (Circle, ${posMode}) — Unity PositionCircle.cs`);
                 lines.push(`    {`);
-                // 种子用全局递增 spawn 索引 (id + u_TotalSpawnedCount)，不能只用 particleIndex：
+                // 种子用全局递增 spawn 索引，不能只用 particleIndex：
                 // particleIndex 来自 DeadList 回收槽位，稳态只复用 ~5-6 个槽 → 只算出 ~5-6 个固定角度反复用
                 // → emitter 聚成簇。Unity 用 per-spawn 递增种子，每次生成都是新角 → 随时间铺满整圈。
-                lines.push(`        uint _ccSeed = WangHash((id + uint(u_TotalSpawnedCount)) ^ uint(u_SystemSeed) ^ 0x9F1Bu);`);
+                // initialize 阶段用 id + u_TotalSpawnedCount；output/update 阶段没有 id，改读 spawnIndex。
+                const _ccSpawnId = particleVar === "particle" ? "id + uint(u_TotalSpawnedCount)" : `${particleVar}.spawnIndex`;
+                lines.push(`        uint _ccSeed = WangHash((${_ccSpawnId}) ^ uint(u_SystemSeed) ^ 0x9F1Bu);`);
                 lines.push(`        float _ccTheta = 6.28318530718 * Rand(_ccSeed);`);
                 lines.push(`        float _ccRNorm = sqrt(${volumeFactor} + (1.0 - ${volumeFactor}) * Rand(_ccSeed));`);
                 lines.push(`        vec3 _ccDir = vec3(sin(_ccTheta), cos(_ccTheta), 0.0);`);
@@ -1704,7 +1708,15 @@ export function genSetAttributeBlockCode(
             return null; // Output 阶段直接跳过
         }
     } else if (source === "SpawnIndex") {
-        applyAssign((attrType === "uint" || attrType === "int") ? "id" : "float(id)");
+        // ⭐ vec 类属性(如 color 逐蜡烛蜡池色写 .b 通道)必须把标量 spawnIndex 广播成对应 vec 类型,
+        //    否则 applyCompositionWithChannels 生成 `vec3 _chanV = float(id)`(标量赋 vec3)编译报错。
+        const _isVec = attrType === "vec3" || attrType === "color" || attrType === "vec2" || attrType === "vec4";
+        if (_isVec) {
+            const _gt = attrType === "vec2" ? "vec2" : (attrType === "vec4" ? "vec4" : "vec3");
+            applyAssign(`${_gt}(float(id))`);
+        } else {
+            applyAssign((attrType === "uint" || attrType === "int") ? "id" : "float(id)");
+        }
     } else if (compiler && contextId != null) {
         // 尝试从 Operator 连线编译表达式
         const compiled = compiler.compileSetAttributeValue(contextId, block.id, attrType, vals);
@@ -3119,11 +3131,12 @@ function genPositionSequentialCode(
     lines.push(`    {`);
     // operator 编译产生的临时变量声明（如 _opNN）必须先于使用
     for (const s of opStmts) lines.push(`        ${s}`);
-    // Initialize shader 中 id 是当前 dispatch 的 thread-local 索引（0..SpawnedCount-1）。
-    // 在 fractional spawn rate 下大多数帧 spawn 0~1 个粒子，id 几乎总是 0，
-    // 会让所有粒子塌缩到 sequential 序列第 0 个位置。Unity 用 ParticleId（全局累积），
-    // 对应 Laya 的 id + u_TotalSpawnedCount。
-    lines.push(`        uint _psId = id + uint(u_TotalSpawnedCount);`);
+    // spawn 序号：initialize 阶段 particleVar==="particle"，线程索引 id 可用；
+    //   用 id + u_TotalSpawnedCount 得全局 spawn 序号（否则 fractional spawn 下 id 恒为 0，粒子全塌缩到第 0 位）。
+    // output/update 阶段 particleVar==="p"，没有 id，改读粒子已存的 spawnIndex
+    //   （单次 burst 系统里二者相等；此前 output 上下文误用 id 会导致 "undeclared identifier" 编译失败）。
+    const _psSpawnId = particleVar === "particle" ? "id + uint(u_TotalSpawnedCount)" : `${particleVar}.spawnIndex`;
+    lines.push(`        uint _psId = ${_psSpawnId};`);
     lines.push(`        float _psCount = ${countExpr};`);
     lines.push(`        float _psSeg = mod(float(_psId), max(_psCount, 1.0));`);
     // Unity VFXOperatorUtility.SequentialCircle 用 dt/count（angle ∈ [0, 2π)，无重复位置）；

@@ -79,6 +79,8 @@ interface SpawnOpts {
     perStripRand?: boolean; // true: 一条 strip 内所有粒子用同一 random t（用 stripIndex 作 hash seed）
                             // 对齐 Unity Random Float (Per Particle Strip) 模式
     perStripSeed?: number;  // 真实 Unity 接 op 的 seed 值（让 Laya hash 跟 Unity 一致）
+    hasStripIndex?: boolean; // 系统是否 strip(useStripRingBuffer)。false 时 perStripRand 退化用 spawnIndex——
+                             // 非 strip 系统没有 stripIndex 字段,硬用会 'stripIndex' undeclared 编译报错(OrientFixedAxis)。
 }
 
 const PI2 = "6.28318530718";
@@ -414,8 +416,11 @@ function genCircleCore(center: string, radius: string, arc: string, pVar: string
     // 对齐 Unity arcSequencer ← Random Float (Per Particle Strip) 的语义
     // perStripSeed 是 Unity Random op 的 seed 值，hardcode fallback 用 0xC0FFEE 兼容旧路径
     const stripHashSeed = (spawn?.perStripSeed != null) ? `${spawn.perStripSeed >>> 0}u` : "0xC0FFEEu";
+    // perStripRand 的 hash 种子:strip 系统用 stripIndex(同 strip 同 t);非 strip 系统没有 stripIndex 字段,
+    // 退化用 spawnIndex(每粒子稳定唯一)——否则 'stripIndex' undeclared 编译报错(OrientFixedAxis Circle)。
+    const perStripSeedField = spawn?.hasStripIndex ? `${pVar}.stripIndex` : `${pVar}.spawnIndex`;
     const arcSrc = spawn?.custom
-        ? (spawn.perStripRand ? `(float(WangHash(${pVar}.stripIndex + ${stripHashSeed})) / 4294967295.0)` : spawn.arcSeq)
+        ? (spawn.perStripRand ? `(float(WangHash(${perStripSeedField} + ${stripHashSeed})) / 4294967295.0)` : spawn.arcSeq)
         : `Rand(${seed})`;
     const lines: string[] = [];
     lines.push(`${indent}float _theta = ${arcSrc} * ${arc};`);
@@ -572,6 +577,7 @@ export function genSetPositionShapeCode(
     simulateSpace?: string,
     contextId?: number,
     compiler?: VfxExprCompiler,
+    hasStripIndex?: boolean,
 ): string[] {
     const p = block.props || {};
     const shape = (p.shape as string) || "Sphere";
@@ -614,6 +620,7 @@ export function genSetPositionShapeCode(
         lineSeq: lineSeqExpr,
         perStripRand: !!p._perStripRand,
         perStripSeed: typeof p._perStripSeed === "number" ? (p._perStripSeed as number) : undefined,
+        hasStripIndex: !!hasStripIndex,
     };
     const posComp = (p.positionComposition as string) || "Overwrite";
 

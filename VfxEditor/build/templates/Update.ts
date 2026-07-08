@@ -25,7 +25,7 @@ export interface IOutputEventInfo {
 
 export function generateUpdate(shaderName: string, common: string, blocks: IVfxBlockData[], triggerEvents?: ITriggerEventInfo[], contextId?: number, compiler?: VfxExprCompiler, skipZeroDeltaTime?: boolean, simulateSpace?: string, useStripRingBuffer?: boolean, outputEvents?: IOutputEventInfo[], attrNames?: Set<string>): string {
     const needsDepthBuffer = blocks.some(b => b.enabled !== false && b.typeId === "collisionDepthBuffer");
-    const blockCode = genBlockCode(blocks, UPDATE_BLOCK_OPTS, contextId, compiler, simulateSpace);
+    const blockCode = genBlockCode(blocks, { ...UPDATE_BLOCK_OPTS, hasStripIndex: !!useStripRingBuffer }, contextId, compiler, simulateSpace);
     const needSeed = blocksNeedSeed(blocks);
     const events = triggerEvents || [];
     const hasEvents = events.length > 0;
