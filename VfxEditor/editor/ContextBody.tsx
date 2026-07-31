@@ -23,6 +23,9 @@ import type {
 } from "./data/Types";
 
 const BLOCK_CLIPBOARD_KIND = "Layabox.VfxEditor.Block";
+const ADD_BLOCK_MENU_ID = "VfxEditor.Block.Add";
+const BLOCK_MENU_ID = "VfxEditor.Block.Item";
+const SET_ATTRIBUTE_MENU_ID = "VfxEditor.Block.SetAttribute";
 
 export function ContextBody(props: IEditor.FlowApi.NodeBodyProps): React.ReactElement {
     const document = editorController.active;
@@ -49,7 +52,9 @@ export function ContextBody(props: IEditor.FlowApi.NodeBodyProps): React.ReactEl
             getBlocksForContext(context.typeId),
             definition => document.addBlock(props.node.id, definition.typeId),
         );
-        IEditor.Menu.create(items).show(null, {
+        const menu = IEditor.Menu.getById(ADD_BLOCK_MENU_ID) ?? IEditor.Menu.create(ADD_BLOCK_MENU_ID);
+        menu.setItems(items);
+        menu.show(null, {
             x: event.clientX,
             y: event.clientY,
         });
@@ -260,7 +265,9 @@ function showBlockMenu(
             click: () => document.removeBlock(contextNodeId, block.id),
         },
     );
-    IEditor.Menu.create(items).show(null, IEditor.Menu.getPopupPosition(anchor));
+    const menu = IEditor.Menu.getById(BLOCK_MENU_ID) ?? IEditor.Menu.create(BLOCK_MENU_ID);
+    menu.setItems(items);
+    menu.show(null, IEditor.Menu.getPopupPosition(anchor));
 }
 
 function showSetAttributeSettingsMenu(
@@ -272,7 +279,9 @@ function showSetAttributeSettingsMenu(
     if (!document)
         return;
     const items = createSetAttributeMenuItems(document, contextNodeId, block);
-    IEditor.Menu.create(items).show(null, IEditor.Menu.getPopupPosition(anchor));
+    const menu = IEditor.Menu.getById(SET_ATTRIBUTE_MENU_ID) ?? IEditor.Menu.create(SET_ATTRIBUTE_MENU_ID);
+    menu.setItems(items);
+    menu.show(null, IEditor.Menu.getPopupPosition(anchor));
 }
 
 function createSetAttributeMenuItems(

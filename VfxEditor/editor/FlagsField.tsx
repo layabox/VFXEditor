@@ -2,6 +2,8 @@ import * as React from "react";
 import { t } from "./I18n";
 import { getVfxCaption } from "./data/NodeDefinitions";
 
+const FLAGS_MENU_ID = "VfxEditor.Flags";
+
 @IEditor.inspectorField("VfxEditor.Flags")
 export class FlagsField extends IEditor.PropertyField {
     create(): IEditor.IPropertyFieldCreateResult {
@@ -32,7 +34,8 @@ export class FlagsField extends IEditor.PropertyField {
 
     private showMenu(anchor: HTMLButtonElement, options: string[], mask: number): void {
         const allMask = (1 << options.length) - 1;
-        IEditor.Menu.create([
+        const menu = IEditor.Menu.getById(FLAGS_MENU_ID) ?? IEditor.Menu.create(FLAGS_MENU_ID);
+        menu.setItems([
             { label: t("none"), click: () => this.target.setValue(0) },
             { label: t("all"), click: () => this.target.setValue(allMask) },
             { type: "separator" },
@@ -42,6 +45,7 @@ export class FlagsField extends IEditor.PropertyField {
                 checked: (mask & (1 << index)) !== 0,
                 click: () => this.target.setValue(mask ^ (1 << index)),
             })),
-        ]).show(null, IEditor.Menu.getPopupPosition(anchor));
+        ]);
+        menu.show(null, IEditor.Menu.getPopupPosition(anchor));
     }
 }

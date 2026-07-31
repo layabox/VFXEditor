@@ -14,6 +14,8 @@ import {
 import type { IVfxPropertyDef } from "./data/Types";
 
 const HIDDEN_CATALOG_OPTIONS = { catalogBarStyle: "hidden" as const };
+const ADD_PROPERTY_MENU_ID = "VfxEditor.Property.Add";
+const PROPERTY_MENU_ID = "VfxEditor.Property.Item";
 
 export const VFX_PROPERTY_DRAG_MIME = "application/x-laya-vfx-property";
 
@@ -63,12 +65,14 @@ export function LeftPanel({ document }: { document: VfxDocument }): React.ReactE
     }, [document, document.properties.length, selectedProperty]);
 
     const addProperty = (anchor: HTMLButtonElement) => {
-        IEditor.Menu.create(propertyTypeOptions.map(option => ({
+        const menu = IEditor.Menu.getById(ADD_PROPERTY_MENU_ID) ?? IEditor.Menu.create(ADD_PROPERTY_MENU_ID);
+        menu.setItems(propertyTypeOptions.map(option => ({
             label: option.label,
             click: () => setSelectedProperty(
                 document.addProperty(option as PropertyTypeOption),
             ),
-        }))).show(null, IEditor.Menu.getPopupPosition(anchor));
+        })));
+        menu.show(null, IEditor.Menu.getPopupPosition(anchor));
     };
 
     const toggleGroup = (group: string) => {
@@ -89,14 +93,16 @@ export function LeftPanel({ document }: { document: VfxDocument }): React.ReactE
         event: React.MouseEvent,
     ) => {
         event.preventDefault();
-        IEditor.Menu.create([{
+        const menu = IEditor.Menu.getById(PROPERTY_MENU_ID) ?? IEditor.Menu.create(PROPERTY_MENU_ID);
+        menu.setItems([{
             label: t("deleteProperty"),
             click: () => {
                 document.removeProperty(index);
                 if (selectedProperty === property)
                     setSelectedProperty(null);
             },
-        }]).show(null, { x: event.clientX, y: event.clientY });
+        }]);
+        menu.show(null, { x: event.clientX, y: event.clientY });
     };
 
     return (
