@@ -15,7 +15,7 @@ export const componentTypes: IEditor.FTypeDescriptor[] = [
         name: "VFXAsset",
         isAsset: true,
         isEngineSymbol: true,
-        assetTypeFilter: "LVFX",
+        assetTypeFilter: "VFXGraph",
         properties: [],
     },
     {
@@ -43,7 +43,7 @@ export const componentTypes: IEditor.FTypeDescriptor[] = [
                 name: "asset",
                 type: "VFXAsset",
                 isAsset: true,
-                assetTypeFilter: "LVFX",
+                assetTypeFilter: "VFXGraph",
             },
             {
                 name: "randomSeed",
@@ -67,7 +67,7 @@ export const componentTypes: IEditor.FTypeDescriptor[] = [
                 name: "propertyOverrides",
                 caption: "Properties",
                 type: "string",
-                inspector: "VfxPropertyOverrides",
+                inspector: "VfxEditor.PropertyOverrides",
                 default: "{}",
             } as any,
         ],

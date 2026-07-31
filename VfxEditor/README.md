@@ -227,7 +227,7 @@ OnPlay (Initial Event)
 4. Update 没自定义逻辑，依靠默认 `position += velocity * dt` 让粒子向上飘
 5. Output Mesh 把所有活粒子用 Sphere 网格画出来 → 看到一串向上飞的球
 
-**右侧 Inspector 的图级属性**（无节点选中时）：
+**左侧“属性”标签中的图级设置**：
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
@@ -245,7 +245,7 @@ OnPlay (Initial Event)
 
 ### Properties（图级变量）
 
-左下角「属性」面板里可以加图级 Property（int / float / Vec2 / Color / Texture2D / Mesh 等），代码里可以动态读写：
+左侧「属性」标签里可以添加图级 Property（int / float / Vec2 / Color / Texture2D / Mesh 等），代码里可以动态读写：
 
 ```ts
 const vfx = sprite.getComponent(VisualEffect);
@@ -254,7 +254,7 @@ vfx.setVector3("WindDir", new Vector3(1, 0, 0));
 vfx.setTexture("RampTex", rampTex);
 ```
 
-`Property Settings` 面板可控制 `exposed`（是否对外暴露）、`min/max`（Range mode）、`default` 等。
+展开属性条目后可设置 `exposed`（是否对外暴露）、`min/max`（Range mode）、`default` 等；节点与 Block 参数在左侧「更新」标签中编辑。
 
 ### Operator（独立计算节点）
 
@@ -284,7 +284,7 @@ vfx.setTexture("RampTex", rampTex);
 | 粒子不出来 | 1. 浏览器/设备是否开 WebGPU；2. `Initial Event` 是否对得上 .vfx 里的事件名 |
 | 粒子能出但不动 | 检查 Initialize 是否设了 velocity；Update 的 `Update Position` 是否勾选 |
 | 数量达不到预期 | Initialize 的 `Capacity` 是否太小（默认 64，密集场景调到几百~几千） |
-| Inspector 标签被截断 | VFX Graph 面板右栏当前 380px，可继续调整 `VfxGraphPanel.ts:RIGHT_W` |
+| 属性标签被截断 | 拖动左侧“属性 / 更新”栏与舞台之间的分隔条，扩大编辑区域 |
 | .vfx 没生成 .lvfx 子资产 | LayaPro dev 模式需 `npm run install-nativetools` 装 KtxPixelTool 等工具链 |
 
 ---

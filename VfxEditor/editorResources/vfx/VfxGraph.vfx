@@ -1,0 +1,20 @@
+{
+  "autoID": 0,
+  "events": [],
+  "contexts": [],
+  "operators": [],
+  "properties": [],
+  "customAttributes": [],
+  "props": {
+    "fixedDeltaTime": false,
+    "exactFixedTime": false,
+    "ignoreTimeScale": false,
+    "preWarmTotalTime": 0,
+    "preWarmStepCount": 0,
+    "preWarmDeltaTime": 0,
+    "initialEventName": "OnPlay"
+  },
+  "editorData": {
+    "comments": []
+  }
+}

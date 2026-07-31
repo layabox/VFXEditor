@@ -1,0 +1,418 @@
+:host {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.vfx-editor {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--panel-bg);
+    color: var(--text);
+}
+
+.vfx-file-tabs {
+    display: flex;
+    flex: 0 0 auto;
+    padding: 1px 0 0 1px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-header);
+}
+
+.vfx-file-tabs > :first-child {
+    min-width: 0;
+    flex: 1;
+}
+
+.vfx-workspace {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.vfx-left-host {
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg-base);
+}
+
+.resize-handle.vfx-workspace-resize {
+    z-index: 2;
+    width: 5px;
+    flex: 0 0 auto;
+    margin: 0 -2px;
+    background: transparent;
+}
+
+.vfx-left {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.vfx-left-list {
+    min-height: 80px;
+    flex: 1 1 auto;
+    overflow: auto;
+    padding-bottom: 12px;
+}
+
+.vfx-embedded-inspector {
+    width: 100%;
+    min-width: 0;
+}
+
+.vfx-left-list > .vfx-embedded-inspector:first-child
+    .inspector-root > .inspector-field[data-kind="catalog"]:first-child > .inspector-row {
+    border-top: 0;
+}
+
+.vfx-property-list-section {
+    margin-top: 2px;
+}
+
+.vfx-property-list-header {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 4px;
+    box-sizing: border-box;
+    height: 22px;
+    min-height: 22px;
+    padding: 0 4px 0 0;
+    color: var(--text);
+    background: var(--bg-header);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-subtle);
+    cursor: default;
+    user-select: none;
+}
+
+.vfx-property-list-header > button.inspector-collapse-button {
+    align-self: center;
+    margin-top: 0;
+}
+
+.vfx-property-list-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+button.icon.vfx-property-add {
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    padding: 0;
+    font-size: 15px;
+}
+
+.vfx-property-list {
+    padding: 4px 0 6px;
+}
+
+.vfx-property-list-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 8px;
+    min-height: 22px;
+    padding: 1px 8px 1px 22px;
+    outline: none;
+    cursor: grab;
+}
+
+.vfx-property-list-row.grouped {
+    padding-left: 34px;
+}
+
+.vfx-property-list-row:active {
+    cursor: grabbing;
+}
+
+.vfx-property-list-row:hover {
+    background: var(--list-item-over);
+}
+
+.vfx-property-list-row.active {
+    background: var(--list-item-selected);
+}
+
+.vfx-left-list:not(:focus-within) .vfx-property-list-row.active {
+    background: var(--list-item-selected-blur);
+}
+
+.vfx-property-list-name,
+.vfx-property-list-type {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vfx-property-list-type {
+    max-width: 96px;
+    color: var(--text-muted);
+    font-size: var(--font-size-small);
+}
+
+.vfx-property-list-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    box-sizing: border-box;
+    min-height: 22px;
+    padding: 1px 8px 1px 6px;
+    color: var(--text-muted);
+    font-size: var(--font-size-small);
+    cursor: default;
+    user-select: none;
+}
+
+.vfx-property-list-group:hover {
+    color: var(--text);
+}
+
+.vfx-property-list-group > button.inspector-collapse-button {
+    flex: 0 0 auto;
+    align-self: center;
+    margin-top: 0;
+}
+
+.vfx-property-list-group > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vfx-property-list-empty {
+    padding: 5px 10px 5px 22px;
+    font-size: var(--font-size-small);
+}
+
+.resize-handle.vfx-left-resize {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex: 0 0 7px;
+    align-items: center;
+    height: 7px;
+    margin: -3px 0;
+    background: transparent;
+}
+
+.vfx-left-resize-line {
+    width: 100%;
+    height: 3px;
+    background: var(--bg-sunken);
+}
+
+.vfx-left-inspector {
+    min-height: 140px;
+    max-height: 420px;
+    flex: 0 0 auto;
+    overflow: hidden;
+    background: var(--bg-base);
+}
+
+.vfx-left-inspector > .vfx-embedded-inspector {
+    height: 100%;
+    box-sizing: border-box;
+    overflow: auto;
+    padding: 8px 0;
+}
+
+.vfx-left-inspector-empty {
+    display: grid;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    place-items: center;
+    padding: 16px;
+    text-align: center;
+}
+
+.vfx-stage {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--bg-sunken);
+}
+
+.flow-addmenu-popup {
+    height: 460px;
+}
+
+.flow-addmenu-popup > .flow-addmenu {
+    height: 100%;
+}
+
+.flow-addmenu-popup .flow-addmenu-list {
+    min-height: 0;
+    max-height: none;
+    flex: 1 1 auto;
+}
+
+.vfx-empty-document {
+    display: grid;
+    flex: 1;
+    place-items: center;
+    color: var(--text-muted);
+    background: var(--bg-sunken);
+}
+
+.vfx-context-blocks {
+    margin-top: 4px;
+}
+
+.vfx-context-properties {
+    min-width: 360px;
+    margin-top: 6px;
+    padding: 0;
+}
+
+.vfx-context-properties .vfx-embedded-inspector {
+    min-height: 0;
+    flex: none;
+    overflow: visible;
+    padding-bottom: 0;
+}
+
+.vfx-context-block {
+    border: 0;
+}
+
+.vfx-context-block-add {
+    padding: 5px 6px 6px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.vfx-context-add-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    width: 100%;
+    min-height: 24px;
+}
+
+.vfx-context-block.inspector-field,
+.vfx-port-tree-item.inspector-field {
+    content-visibility: visible;
+    contain-intrinsic-size: none;
+}
+
+.vfx-context-block-title {
+    position: relative;
+}
+
+.vfx-context-block.inspector-field[data-kind="catalog"]
+    > .vfx-context-block-title.inspector-row
+    > label {
+    transform: none;
+}
+
+.vfx-block-port-body {
+    padding: 0;
+}
+
+.vfx-port-tree-line {
+    overflow: visible;
+}
+
+.vfx-port-row-content,
+.vfx-port-row-content > .flow-rows,
+.vfx-port-row-content > .flow-rows > .flow-col-in,
+.vfx-port-row-content .flow-port-row.in {
+    display: contents;
+}
+
+.vfx-port-row-content > .flow-rows > .flow-col-out {
+    display: none;
+}
+
+.vfx-port-tree-line .flow-port-label {
+    grid-column: 2;
+    min-width: 0;
+    align-self: center;
+    box-sizing: border-box;
+    padding-left: var(--inspector-indent);
+    overflow: hidden;
+    color: var(--text);
+    line-height: 24px;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vfx-port-tree-line .flow-control,
+.vfx-port-tree-line .vfx-inline-boolean {
+    grid-column: 3;
+    min-width: 0;
+    width: 100%;
+    max-width: none;
+    align-self: center;
+    justify-self: stretch;
+}
+
+.vfx-collapsed-port-proxies {
+    position: absolute;
+    inset: 0;
+    overflow: visible;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.vfx-collapsed-port-proxies > .flow-rows {
+    width: 100%;
+    height: 100%;
+}
+
+.vfx-collapsed-port-proxies .flow-col {
+    height: 100%;
+    justify-content: center;
+}
+
+.vfx-collapsed-port-proxies .flow-port-row {
+    min-height: 0;
+    height: 0;
+    padding: 0;
+}
+
+.vfx-collapsed-port-proxies .flow-port-label,
+.vfx-collapsed-port-proxies .flow-control {
+    display: none;
+}
+
+.vfx-port-tree-children {
+    margin: 0;
+}
+
+.vfx-inline-vector {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(58px, 1fr));
+    gap: 2px;
+    min-width: 128px;
+}
+
+.vfx-complex-value {
+    padding: 0 4px;
+    font-size: var(--font-size-tiny);
+    white-space: nowrap;
+}
