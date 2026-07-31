@@ -111,9 +111,12 @@ export function LeftPanel({ document }: { document: VfxDocument }): React.ReactE
                     type={VFX_GRAPH_TYPE_ID}
                     historyScope="meta"
                 />
-                <section className="vfx-property-list-section">
+                <section
+                    className="vfx-property-list-section inspector-field"
+                    data-kind="catalog"
+                >
                     <header
-                        className="vfx-property-list-header inspector-row"
+                        className="inspector-row"
                         onClick={() => setPropertiesOpen(current => !current)}
                     >
                         <button
@@ -129,21 +132,27 @@ export function LeftPanel({ document }: { document: VfxDocument }): React.ReactE
                                 setPropertiesOpen(current => !current);
                             }}
                         />
-                        <span className="vfx-property-list-title">{t("exposedProperties")}</span>
-                        <IEditor.React.ToolButton
-                            className="icon vfx-property-add"
-                            title={t("addProperty")}
-                            aria-label={t("addProperty")}
-                            onClick={event => {
-                                event.stopPropagation();
-                                addProperty(event.currentTarget);
-                            }}
-                        >
-                            +
-                        </IEditor.React.ToolButton>
+                        <label>
+                            <span className="inspector-label-text">
+                                {t("exposedProperties")}
+                            </span>
+                        </label>
+                        <span className="inspector-catalog-actions">
+                            <IEditor.React.ToolButton
+                                className="icon vfx-property-add"
+                                title={t("addProperty")}
+                                aria-label={t("addProperty")}
+                                onClick={event => {
+                                    event.stopPropagation();
+                                    addProperty(event.currentTarget);
+                                }}
+                            >
+                                +
+                            </IEditor.React.ToolButton>
+                        </span>
                     </header>
                     {propertiesOpen && (
-                        <div className="vfx-property-list">
+                        <div className="inspector-children">
                             {document.properties.length === 0 && (
                                 <div className="vfx-property-list-empty text-muted">
                                     {t("noExposedProperties")}
@@ -373,6 +382,7 @@ export function TypedInspector({
         <IEditor.React.InspectorPanel
             model={model}
             className="vfx-embedded-inspector"
+            captionWidthRatio={0.5}
         />
     );
 }

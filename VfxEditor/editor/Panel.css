@@ -83,45 +83,8 @@
     margin-top: 2px;
 }
 
-.vfx-property-list-header {
-    display: grid;
-    grid-template-columns: 22px minmax(0, 1fr) auto;
-    align-items: center;
-    column-gap: 4px;
-    box-sizing: border-box;
-    height: 22px;
-    min-height: 22px;
-    padding: 0 4px 0 0;
-    color: var(--text);
-    background: var(--bg-header);
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border-subtle);
-    cursor: default;
-    user-select: none;
-}
-
-.vfx-property-list-header > button.inspector-collapse-button {
-    align-self: center;
-    margin-top: 0;
-}
-
-.vfx-property-list-title {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 button.icon.vfx-property-add {
-    width: 18px;
-    height: 18px;
-    min-width: 18px;
-    padding: 0;
     font-size: 15px;
-}
-
-.vfx-property-list {
-    padding: 4px 0 6px;
 }
 
 .vfx-property-list-row {
@@ -294,10 +257,6 @@ button.icon.vfx-property-add {
     padding-bottom: 0;
 }
 
-.vfx-context-block {
-    border: 0;
-}
-
 .vfx-context-block-add {
     padding: 5px 6px 6px;
     border-top: 1px solid var(--border-subtle);
@@ -318,22 +277,10 @@ button.icon.vfx-property-add {
     contain-intrinsic-size: none;
 }
 
-.vfx-context-block-title {
-    position: relative;
-}
-
 .vfx-context-block.inspector-field[data-kind="catalog"]
     > .vfx-context-block-title.inspector-row
     > label {
     transform: none;
-}
-
-.vfx-block-port-body {
-    padding: 0;
-}
-
-.vfx-port-tree-line {
-    overflow: visible;
 }
 
 .vfx-port-row-content,
@@ -398,21 +345,4 @@ button.icon.vfx-property-add {
 .vfx-collapsed-port-proxies .flow-port-label,
 .vfx-collapsed-port-proxies .flow-control {
     display: none;
-}
-
-.vfx-port-tree-children {
-    margin: 0;
-}
-
-.vfx-inline-vector {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(58px, 1fr));
-    gap: 2px;
-    min-width: 128px;
-}
-
-.vfx-complex-value {
-    padding: 0 4px;
-    font-size: var(--font-size-tiny);
-    white-space: nowrap;
 }

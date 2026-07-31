@@ -442,24 +442,22 @@ function BlockPortTree({
         inputs: [],
     };
     return (
-        <div className="vfx-block-port-body">
-            <div className="vfx-port-tree">
-                {roots.map(root => (
-                    <PortTreeBranch
-                        key={root.port.id}
-                        flowProps={flowProps}
-                        node={node}
-                        branch={root}
-                        depth={0}
-                        portCollapseOverrides={portCollapseOverrides}
-                        onToggle={onToggle}
-                    />
-                ))}
-            </div>
+        <>
+            {roots.map(root => (
+                <PortTreeBranch
+                    key={root.port.id}
+                    flowProps={flowProps}
+                    node={node}
+                    branch={root}
+                    depth={0}
+                    portCollapseOverrides={portCollapseOverrides}
+                    onToggle={onToggle}
+                />
+            ))}
             {node.outputs.length > 0 && (
                 <IEditor.Flow.DefaultNodeBody {...flowProps} node={outputNode} />
             )}
-        </div>
+        </>
     );
 }
 
@@ -527,7 +525,7 @@ function PortTreeBranch({
                 )}
             </div>
             {hasChildren && !collapsed && (
-                <div className="inspector-children vfx-port-tree-children">
+                <div className="inspector-children">
                     {branch.children.map(child => (
                         <PortTreeBranch
                             key={child.port.id}
