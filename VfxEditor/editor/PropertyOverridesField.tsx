@@ -31,7 +31,6 @@ export class PropertyOverridesField extends IEditor.PropertyField {
         return {
             stretchWidth: true,
             captionDisplay: "none",
-            noIndent: true,
             noMinHeight: true,
         };
     }

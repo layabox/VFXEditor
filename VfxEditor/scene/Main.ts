@@ -20,17 +20,14 @@ import "./Exporter";
  *               必须先加载 .shader 触发 shader 注册，否则 VFXRenderer fallback Shader3D.find 失败
  *               报 `'VFXUnlit' shader not registered`。
  */
-const VFX_BUILTIN_UUIDS = [
-    // .shader 文件 — 加载触发 Shader3D.add 注册 shader name
-    "ce815578-6547-4f83-be80-a89912dc03d0", // VFXUnlit.shader
-    "d29a39fc-4dd9-4e3c-8451-db6a6092d17a", // VFXStrip.shader
-    "046c3dc9-8ef4-4e3b-bce3-df93e11bd86e", // VFXBillboardProcedural.shader
-    "9e6cee89-5666-43e3-a064-7c26d8ce36d8", // VFXCubeProcedural.shader
-    "7b8f3d2e-a415-4c6b-9d8f-2e1a5c3b4d6a", // VFXDistortionQuad.shader
-    // .lmat 文件 — 加载实例化默认 material，依赖上面 shader 已注册
-    "13d6c5e4-ff1f-4739-b21d-0d64931564cb", // VFXUnlit.lmat
-    "356f6643-fab9-4626-b04f-9e07482f5b53", // VFXStrip.lmat
-];
+// const VFX_BUILTIN_UUIDS = [
+//     // .shader 文件 — 加载触发 Shader3D.add 注册 shader name
+//     "ce815578-6547-4f83-be80-a89912dc03d0", // VFXUnlit.shader
+//     "d29a39fc-4dd9-4e3c-8451-db6a6092d17a", // VFXStrip.shader
+//     "046c3dc9-8ef4-4e3b-bce3-df93e11bd86e", // VFXBillboardProcedural.shader
+//     "9e6cee89-5666-43e3-a064-7c26d8ce36d8", // VFXCubeProcedural.shader
+//     "7b8f3d2e-a415-4c6b-9d8f-2e1a5c3b4d6a", // VFXDistortionQuad.shader
+// ];
 
 @IEditorEnv.regClass()
 export class Main {
@@ -38,10 +35,17 @@ export class Main {
     static onPreload() {
         // 注册组件类型（VisualEffect 出现在"添加组件"菜单 + Inspector 属性识别）
         EditorEnv.typeRegistry.addTypes(componentTypes, true);
+    }
 
-        // 预加载 vfx 内置默认资源
-        for (const uuid of VFX_BUILTIN_UUIDS) {
-            Laya.loader.load("res://" + uuid).catch(() => { });
-        }
+    @IEditorEnv.onLoad
+    static async onLoad() {
+        let absPath = EditorEnv.assetMgr.getFullPath(EditorEnv.assetMgr.getAsset("editorResources/vfx/runtime", true));
+        [
+            "VFXBillboardProcedural.shader",
+            "VFXCubeProcedural.shader",
+            "VFXDistortionQuad.shader",
+            "VFXUnlit.shader",
+            "VFXStrip.shader"
+        ].map(name => EditorEnv.liveServer.addFileRoute("internal/vfx/" + name, absPath + "/" + name));
     }
 }
