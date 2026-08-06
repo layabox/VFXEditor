@@ -65,6 +65,7 @@ export function renderPortInput(
             <span className="flow-control nodrag">
                 <IEditor.React.TextInput
                     value={value == null ? "" : String(value)}
+                    multiline={property?.multiline}
                     onCommit={next => {
                         commit(next);
                         return true;

@@ -12,6 +12,7 @@ export interface WorkspaceState {
 class EditorController {
     readonly documents = new Map<string, VfxDocument>();
     active: VfxDocument | null = null;
+    onLastDocumentClosed: (() => void) | null = null;
 
     private _tabBar: FileTabBar | null = null;
     private _version = 0;
@@ -281,6 +282,8 @@ class EditorController {
         this.documents.delete(assetId);
         this._tabBar?.removeTab(assetId);
         this.emit();
+        if (this.documents.size === 0)
+            this.onLastDocumentClosed?.();
     }
 
     private emit(): void {

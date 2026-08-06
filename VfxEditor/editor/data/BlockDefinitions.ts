@@ -100,7 +100,7 @@ export const VFX_BLOCK_DEFS: IVfxBlockTypeDef[] = [
         category: "Custom",
         affinity: ["initialize", "update", "outputBillboard", "outputMesh", "outputTrail"],
         properties: [
-            { name: "code", caption: "GLSL Code", type: "string", default: "// $p.position / $p.velocity / $p.color etc.\n$p.color.r = 1.0;" },
+            { name: "code", caption: "GLSL Code", type: "string", multiline: true, default: "// $p.position / $p.velocity / $p.color etc.\n$p.color.r = 1.0;" },
         ],
     },
     {

@@ -1071,7 +1071,11 @@ declare global {
              * Get a plain object that contains all properties of the specified object.
              */
             getProps(obj: any): any;
+
+            /** Starts tracking a loaded resource so later edits can be detected and saved. */
+            trackResource(resource: any): void;
         }
+
         export interface IPrefabI18nString {
             /**
              * Object that contains the property.
@@ -2561,6 +2565,12 @@ declare global {
         export type GizmoMeshKey = "quad" | "cube" | "sphere" | "cone" | "plane";
 
         export interface IGizmos3D {
+
+            /** The graphics object currently being edited in either the 2D or 3D scene. */
+            readonly editingGraphics: Readonly<IGraphicsEditingInfo>;
+
+            /** Switches the single graphics object being edited by scene gizmos. */
+            switchEditingGraphics(node: Laya.Node, comp?: Laya.Component, propPath?: ReadonlyArray<string>): void;
 
             /**
              * Get a built-in mesh for gizmos.
@@ -6152,6 +6162,15 @@ declare global {
             arrayActions?: Array<"append" | "insert" | "delete" | "move">;
 
             /**
+             * Applicable to array type properties. Defines an optional header and proportional width for each column
+             * rendered by a compound array-element inspector. Width values are percentages and are normalized when
+             * their total is not exactly 100.
+             *
+             * Use "i18n:<key>" or "i18n:<file-id>:<key>" for localized captions.
+             */
+            arrayColumns?: Array<{ caption: string; width: number }>;
+
+            /**
              * Applicable to array or dictionary type properties. Here you can define the properties of array/dictionary elements.
              */
             elementProps?: Partial<FPropertyDescriptor>;
@@ -7598,6 +7617,12 @@ declare global {
             deepCloneObj(obj: any): any;
 
             /**
+             * Creates a cycle-free snapshot containing only primitives, arrays and plain objects.
+             * Throws when the value contains cycles or unsupported runtime objects.
+             */
+            clonePlainData<T>(value: T): T;
+
+            /**
              * Merge two objects. 
              * 
              * If a property with the same name exists in both objects, and the value of it is an object, the two objects will be merged recursively.
@@ -7667,7 +7692,14 @@ declare global {
             getDataByPath(obj: any, datapath: ReadonlyArray<string>, pathLen?: number): any;
 
             /**
-             * Whether an object is empty. A empty object has no properties.
+             * Whether a value has enumerable string-keyed properties.
+             * @param value The value to inspect.
+             * @param ignoreEditorInternal Whether properties prefixed with `_$` should be ignored.
+             */
+            hasEnumerableProperties(value: unknown, ignoreEditorInternal?: boolean): boolean;
+
+            /**
+             * Whether an object has no enumerable properties other than editor-internal properties prefixed with `_$`.
              * @param obj The object to check.
              * @returns True if the object is empty, otherwise false. 
              */
@@ -7703,6 +7735,7 @@ declare global {
              */
             assignObject(target: any, source: any): any;
         }
+
         export type SettingsLocation = "application" | "project" | "local" | "memory";
 
         export interface ISettings {

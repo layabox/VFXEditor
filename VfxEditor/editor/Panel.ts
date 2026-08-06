@@ -23,6 +23,7 @@ export class Panel extends IEditor.EditorPanel {
         this._react.setSize(1100, 720);
         this._react.adoptStyles(IEditor.Flow.styles + "\n" + panelStyles);
         this._panel = this._react;
+        editorController.onLastDocumentClosed = this.closePopupIfAlone;
         this._react.render(createElement(EditorView));
     }
 
@@ -56,10 +57,16 @@ export class Panel extends IEditor.EditorPanel {
     }
 
     onDestroy(): void {
+        editorController.onLastDocumentClosed = null;
         editorController.stopAssetWatching();
         editorController.dispose();
         this._react?.dispose();
     }
+
+    private readonly closePopupIfAlone = (): void => {
+        if (Editor.panelManager.isPanelAloneInSingleGridPopup(PANEL_ID))
+            Editor.panelManager.hidePanel(PANEL_ID);
+    };
 }
 
 function readWorkspaceState(): Partial<WorkspaceState> {

@@ -160,6 +160,18 @@ declare global {
              */
             reload(): void;
         }
+        export interface IWebIFrameOptions {
+            /** Whether rendering is throttled while the frame target is inactive. Defaults to true. */
+            backgroundThrottling?: boolean;
+
+            /**
+             * Restrict the frame to passive content. Script execution, forms, popups,
+             * downloads and top-level navigation are disabled while editor-side DOM
+             * access remains available for theme, focus and drag/drop integration.
+             */
+            sandbox?: boolean;
+        }
+
         export interface IWebIFrame extends IWebFrameBase {
             /**
              * HTML element of the iframe.
@@ -204,6 +216,7 @@ declare global {
              */
             setContent(html: string): void;
         }
+
         export interface IWebFrameBase {
             /**
             * HTML element of the frame.
@@ -1203,6 +1216,852 @@ declare global {
             readonly height: number;
         }
 
+        /**
+         * Public types and runtime values exposed through `IEditor.Timeline`.
+         *
+         * @example
+         * ```tsx
+         * const data = {
+         *   fps: 30,
+         *   aniData: { name: "", prop: [{ name: "opacity", keys: [{ f: 0, val: 1 }] }] }
+         * };
+         * reactDOM.render(<IEditor.Timeline.TimelineEditor data={data} />);
+         * ```
+         */
+        export namespace ITimeline {
+            /** Visual editing mode used by the Timeline component. */
+            type TimelineMode = "frame" | "curves";
+
+            /** Opaque structured value stored by a host application. */
+            interface TimelinePropertyObject {
+                [key: string]: unknown;
+            }
+
+            /**
+             * Values supported by the Timeline data model.
+             *
+             * Numeric values can be displayed and interpolated in Curve mode. Strings
+             * and booleans are discrete. Objects and arrays remain opaque unless a
+             * {@link TimelineCustomValueAdapter} supplies additional semantics.
+             */
+            type TimelinePropertyValue = number | string | boolean | TimelinePropertyObject | unknown[] | null | undefined;
+
+            /** Host-defined metadata attached to a keyframe. */
+            interface TimelineKeyExtension {
+                /** Optional numeric error or tolerance associated with the key. */
+                error?: number;
+                [key: string]: unknown;
+            }
+
+            /** An event marker displayed in the Timeline event lane. */
+            interface TimelineEvent {
+                /** Trigger time in seconds. */
+                time?: number;
+                /** Trigger position in frames. Takes precedence when supplied. */
+                f?: number;
+                /** Host-defined event name. */
+                eventName: string;
+                /** Event arguments preserved by the Timeline without conversion. */
+                params: TimelineValue[];
+            }
+
+            /** Mutable viewport and interaction state, kept separately from Timeline data. */
+            interface TimelineViewState {
+                /** Horizontal content offset in CSS pixels. */
+                scrollX: number;
+                /** Horizontal time-axis scale. */
+                scaleX: number;
+                /** Vertical scale used by Curve mode. */
+                scaleY: number;
+                /** Frame-mode row offset in CSS pixels. */
+                scrollY: number;
+                /** Optional Curve-mode vertical offset in CSS pixels. */
+                curvesScrollY?: number;
+                /** Current playhead position in frames. */
+                currFrame: number;
+                /** Canonical paths of selected tracks. */
+                selectLayers: string[];
+                /** Expanded state indexed by canonical track path. */
+                isOpen: Record<string, boolean>;
+                /** Selected key paths indexed by frame number. */
+                selectKeys: Record<number, string[]>;
+                /** Selected event objects. */
+                selectEvent: TimelineEvent[];
+                /** Selected interval items. */
+                selectRanges?: TimelineRangeSelection[];
+            }
+
+            /**
+             * Mutable document consumed directly by the Timeline component.
+             *
+             * The component intentionally edits this object in place. A host can therefore
+             * expose its native animation data without constructing a second render
+             * document or converting all keyframes on every update.
+             */
+            interface TimelineDocument {
+                /** Frames per second used for time conversion and ruler labels. */
+                fps?: number;
+                /** Whether playback wraps at the end of the document. */
+                loop?: boolean;
+                /** Event markers displayed in the event lane. */
+                event?: TimelineEvent[];
+                /** Root track/layer node. */
+                aniData?: TimelineLayer;
+                /** Explicit document length in frames. */
+                totalFrame?: number;
+                /** Whether the playhead is drawn. */
+                showCursor?: boolean;
+                /** Global keyframe editing capability. Individual layers can further disable editing. */
+                keyEditable?: boolean;
+                /** Whether event markers can be selected, added, moved or removed. The event lane remains visible. */
+                eventEditable?: boolean;
+                /** Global interval/range editing capability. Individual ranges can still be locked. */
+                rangeEditable?: boolean;
+                /** Edge-to-edge range snapping distance in CSS pixels. Zero or omitted disables snapping. */
+                rangeSnapThreshold?: number;
+                /** Whether the built-in horizontal scrollbar is visible. */
+                showScrollbar?: boolean;
+                /**
+                 * Gesture used when dragging empty frame content. The default performs
+                 * key marquee selection; `"pan"` moves the viewport horizontally.
+                 */
+                frameBackgroundDrag?: "select" | "pan";
+            }
+
+            /** A hierarchical Timeline track or property layer. */
+            interface TimelineLayer {
+                /** Stable name used to construct the canonical track path. */
+                name: string;
+                /** Optional display label independent of {@link name}. */
+                label?: string;
+                /** Set to `false` for a grouping node that should not render its own row. */
+                showRow?: boolean;
+                /** Child track nodes. */
+                child?: TimelineLayer[];
+                /** Keyframes stored directly on this layer. */
+                keys?: TimelineKey[];
+                /** Host-neutral interval items rendered on this row. */
+                ranges?: TimelineRange[];
+                /** Whether keys on this layer are editable. Defaults to `true`. */
+                keyEditable?: boolean;
+                /** Property layers associated with the track. */
+                prop?: TimelineLayer[];
+                /** Additional host metadata is preserved by the Timeline. */
+                [key: string]: unknown;
+            }
+
+            /**
+             * A host-neutral interval item such as an animation clip, audio segment,
+             * or state span. Timeline only interprets time bounds and edit flags;
+             * {@link payload} remains opaque.
+             */
+            interface TimelineRange {
+                /** Stable identity within its track. */
+                id: string;
+                /** Visual start position in frames. */
+                start: number;
+                /** Visual end position in frames. */
+                end: number;
+                /** Optional label drawn inside the interval. */
+                label?: string;
+                /** Allows the label to extend past the interval's right edge. Defaults to `false`. */
+                labelOverflow?: boolean;
+                /** Optional solid CSS fill. Omit it to use the themed Timeline clip gradient. */
+                color?: string;
+                /** Optional CSS color used for the interval label. */
+                textColor?: string;
+                /** Whether the interval can be moved horizontally. Defaults to `true`. */
+                movable?: boolean;
+                /** Allows a horizontal move gesture to retarget this range to another visible track. */
+                trackMovable?: boolean;
+                /** Whether the start edge can be trimmed. */
+                trimStart?: boolean;
+                /** Whether the end edge can be trimmed. */
+                trimEnd?: boolean;
+                /** Prevents all interval editing when `true`. */
+                locked?: boolean;
+                /** Set to `false` for visual/reference ranges that must not consume pointer input. */
+                interactive?: boolean;
+                /** Set to `false` when a host overlay draws the range itself. */
+                draw?: boolean;
+                /** Arbitrary host data ignored by the Timeline core. */
+                payload?: unknown;
+            }
+
+            /** Stable selection reference for a range on a track. */
+            interface TimelineRangeSelection {
+                /** Canonical source-track path. */
+                path: string;
+                /** Range ID within the track. */
+                id: string;
+            }
+
+            /** Stable reference to a selected keyframe. */
+            interface TimelineKeySelection {
+                /** Canonical keyframe path. */
+                path: string;
+                /** Key position in frames. */
+                frame: number;
+            }
+
+            /** Range operation currently being previewed or committed. */
+            type TimelineRangeEditKind = "move" | "trimStart" | "trimEnd";
+
+            /** Description of one range move or trim operation. */
+            interface TimelineRangeChange {
+                /** Canonical source-track path. */
+                path: string;
+                /** Destination track during an opt-in cross-track move. Defaults to path. */
+                targetPath?: string;
+                /** Mutable source range object. */
+                range: TimelineRange;
+                /** Type of edit being performed. */
+                kind: TimelineRangeEditKind;
+                /** Range start before the gesture began. */
+                previousStart: number;
+                /** Range end before the gesture began. */
+                previousEnd: number;
+                /** Proposed or committed start position in frames. */
+                start: number;
+                /** Proposed or committed end position in frames. */
+                end: number;
+            }
+
+            /** Canvas geometry produced for a visible range during the current render. */
+            interface TimelineRangeRenderInfo {
+                /** Canonical track path used for this render. */
+                path: string;
+                range: TimelineRange;
+                /** Rendered start position in frames. */
+                start: number;
+                /** Rendered end position in frames. */
+                end: number;
+                /** Left coordinate in Canvas CSS pixels. */
+                left: number;
+                /** Top coordinate in Canvas CSS pixels. */
+                top: number;
+                /** Rendered width in Canvas CSS pixels. */
+                width: number;
+                /** Rendered height in Canvas CSS pixels. */
+                height: number;
+                /** Whether the range is selected. */
+                selected: boolean;
+            }
+
+            /** Drawing context supplied to host-owned Canvas overlays. */
+            interface TimelineFrameOverlayContext {
+                /** Canvas 2D context already scaled for the device pixel ratio. */
+                context: CanvasRenderingContext2D;
+                /** Full Canvas bounds in CSS pixels. */
+                canvasRect: { x: number; y: number; width: number; height: number };
+                /** Track-content bounds in CSS pixels. */
+                contentRect: { x: number; y: number; width: number; height: number };
+                /** Uniform visible-row height in CSS pixels. */
+                rowHeight: number;
+                /** Range geometry generated by the built-in range renderer. */
+                ranges: readonly TimelineRangeRenderInfo[];
+                /** Converts a frame position to a Canvas x-coordinate. */
+                frameToX(frame: number): number;
+                /** Converts a Canvas x-coordinate to a frame position. */
+                xToFrame(x: number): number;
+            }
+
+            /** Pointer position resolved into Timeline frame and track coordinates. */
+            interface TimelineFramePointerContext {
+                /** Canvas-local x-coordinate in CSS pixels. */
+                x: number;
+                /** Canvas-local y-coordinate in CSS pixels. */
+                y: number;
+                /** Frame nearest the pointer. */
+                frame: number;
+                /** Canonical track path under the pointer, when any. */
+                path?: string;
+                /** Track-content bounds in CSS pixels. */
+                contentRect: { x: number; y: number; width: number; height: number };
+                /** Uniform row height in CSS pixels. */
+                rowHeight: number;
+            }
+
+            /** Context passed to a host-owned range context menu. */
+            interface TimelineRangeContextMenuContext extends TimelineFramePointerContext {
+                /** Canonical path of the clicked range. */
+                path: string;
+                /** Range that received the context-menu click. */
+                range: TimelineRange;
+                /** Complete range selection after the clicked range is selected. */
+                selection: readonly TimelineRangeSelection[];
+            }
+
+            /** Host context for applying a range payload from the system clipboard. */
+            interface TimelineRangePasteContext {
+                /** Raw system clipboard text. */
+                text: string;
+                /** Current playhead frame used as the paste origin. */
+                frame: number;
+                /** Preferred destination track, when one is selected. */
+                path?: string;
+                /** Range selection at the time of the paste command. */
+                selection: readonly TimelineRangeSelection[];
+            }
+
+            /** External drag-and-drop context resolved into Timeline coordinates. */
+            interface TimelineFrameDropContext {
+                /** Canvas-local x-coordinate in CSS pixels. */
+                x: number;
+                /** Canvas-local y-coordinate in CSS pixels. */
+                y: number;
+                /** Frame nearest the pointer. */
+                frame: number;
+                /** Canonical track path under the pointer, when any. */
+                path?: string;
+                /** Browser client x-coordinate. */
+                clientX: number;
+                /** Browser client y-coordinate. */
+                clientY: number;
+                /** Native drag payload supplied by the browser. */
+                dataTransfer: DataTransfer;
+            }
+
+            /** Pointer session returned by a host overlay that captures a gesture. */
+            interface TimelineFramePointerSession {
+                /** Called for each captured pointer move. */
+                move(context: TimelineFramePointerContext): void;
+                /** Called once when the pointer is released. */
+                end(context: TimelineFramePointerContext): void;
+                /** Called when the gesture is aborted or the Timeline is disposed. */
+                cancel?(): void;
+            }
+
+            /** Mutable keyframe stored directly in a Timeline layer. */
+            interface TimelineKey {
+                /** Key position in frames. */
+                f: number;
+                /** Key value. */
+                val: TimelinePropertyValue;
+                /** Interpolation identifier, such as a built-in easing name. */
+                tweenType?: string;
+                /** Optional host-defined key metadata. */
+                extend?: TimelineKeyExtension;
+                /** Bezier tangent and weight information used by Curve mode. */
+                tweenInfo?: TimelineTweenInfo;
+                /** Optional source frame retained by copy, paste, or offset operations. */
+                srcF?: number;
+                /** Additional host fields are preserved by the Timeline. */
+                [key: string]: unknown;
+            }
+
+            /** Host-neutral evaluation result for one Timeline position. */
+            interface TimelineEvaluatedFrame {
+                /** Name of the evaluated root layer. */
+                rootName: string;
+                /** Evaluated values indexed by canonical Timeline path. */
+                values: Record<string, TimelineKey["val"] | null | undefined>;
+            }
+
+            /** Callback used to visit evaluated path/value pairs without allocating a new host document. */
+            type TimelineFrameValueVisitor = (
+                path: string,
+                value: TimelineKey["val"] | null | undefined,
+            ) => void;
+
+            /** Legacy hierarchical frame-value shape preserved for host integrations. */
+            interface TimelineFrameData {
+                /** Property values for this node. */
+                prop?: TimelinePropertyObject;
+                /** Child-node values indexed by name. */
+                child?: Record<string, TimelineFrameData>;
+            }
+
+            /** Bezier tangent and weight settings for a numeric key. */
+            interface TimelineTweenInfo {
+                /** Outgoing tangent slope. */
+                outTangent?: number;
+                /** Outgoing tangent weight. */
+                outWeight?: number;
+                /** Incoming tangent slope. */
+                inTangent?: number;
+                /** Incoming tangent weight. */
+                inWeight?: number;
+                /** Whether the incoming tangent weight is locked. */
+                inWeightLock?: boolean;
+                /** Whether the outgoing tangent weight is locked. */
+                outWeightLock?: boolean;
+                /** Whether incoming and outgoing tangents may be edited independently. */
+                broken?: boolean;
+            }
+
+            /** Alias used by event parameters and generic Timeline value APIs. */
+            type TimelineValue = TimelinePropertyValue;
+
+            /** Rendered Curve-mode key and its neighboring keys. */
+            interface TimelineDisplayedKey {
+                /** Key hit bounds and center coordinates in Canvas CSS pixels. */
+                x: number;
+                y: number;
+                x2: number;
+                y2: number;
+                cx: number;
+                cy: number;
+                key: TimelineKey;
+                path: string;
+                next?: TimelineKey;
+                prev?: TimelineKey;
+            }
+
+            /** Cached Canvas geometry and display flags for one key. */
+            interface TimelineDisplayedKeyPosition {
+                /** Key position in frames. */
+                f: number;
+                /** Key hit bounds and center coordinates in Canvas CSS pixels. */
+                x: number;
+                y: number;
+                x2: number;
+                y2: number;
+                cx: number;
+                cy: number;
+                col: string;
+                isSelect?: boolean;
+                isOffset?: boolean;
+                noIn?: boolean;
+            }
+
+            /** Cached display description for a visible Timeline layer. */
+            interface TimelineDisplayedLayer {
+                /** Mutable source layer. */
+                data: TimelineLayer;
+                /** Canonical layer path. */
+                path: string;
+                /** Display label. */
+                label: string;
+                /** Whether this row represents a directory/group. */
+                isDir: boolean;
+                /** Horizontal label offset in CSS pixels. */
+                x: number;
+                /** Whether this is a property row rather than a node track. */
+                isProperty: boolean | undefined;
+                /** Optional row y-coordinate in CSS pixels. */
+                y?: number;
+                /** Optional visible-row index. */
+                index?: number;
+                /** Cached key geometry. */
+                keys: TimelineDisplayedKeyPosition[];
+                /** Key at the current playhead, when any. */
+                currKey?: TimelineKey | null;
+            }
+
+            /** Request issued when the Timeline needs the host to create a property layer. */
+            interface TimelineCreateLayerRequest {
+                /** Canonical node path that will own the property. */
+                namePath: string;
+                /** Property path segments. */
+                prop: string[];
+                /** Layer data prepared by the Timeline. */
+                data: TimelineLayer;
+            }
+
+            /** Context for creating a key whose value requires host-defined semantics. */
+            interface TimelineCustomKeyContext {
+                /** Existing keys on the target layer. */
+                keys: TimelineKey[];
+                /** Requested key position in frames. */
+                frame: number;
+                /** Canonical target path. */
+                path: string;
+                /** Sorted insertion index for the new key. */
+                insertIndex: number;
+                /** Previous adjacent key, when any. */
+                previousKey: TimelineKey | null;
+                /** Next adjacent key, when any. */
+                nextKey: TimelineKey | null;
+                /** Current value supplied by the host. */
+                currentValue: TimelineKey["val"] | null;
+            }
+
+            /** Value returned by a custom evaluator or formatter. */
+            interface TimelineCustomValueResult {
+                value: TimelinePropertyValue;
+                /** Whether the Timeline may cache this result. Defaults to `true`. */
+                cacheable?: boolean;
+            }
+
+            /** Context for interpolating an opaque host value between two keys. */
+            interface TimelineCustomInterpolationContext {
+                /** Canonical path being evaluated, when available. */
+                path?: string;
+                /** Start key of the segment. */
+                start: TimelineKey;
+                /** End key of the segment. */
+                end: TimelineKey;
+                /** Normalized segment position in the range `[0, 1]`. */
+                timeScale: number;
+            }
+
+            /** Context for converting an evaluated value into a display value. */
+            interface TimelineCustomFormatContext {
+                path: string;
+                value: TimelinePropertyValue;
+                /** Source key when formatting an exact-key result. */
+                key?: TimelineKey;
+            }
+
+            /** Restricted mutation surface available to a custom add-key hook. */
+            interface TimelineCustomAddKeyOperations {
+                /** Returns adjacent keys around a frame. */
+                getStartAndEndKey(path: string, frame: number): StartEndKeys | null;
+                /** Invalidates cached evaluation results for a path. */
+                removeCache(path: string): void;
+                /** Adds a key through the built-in direct insertion path. */
+                addKeyDirect(path: string, frame: number): TimelineKey[] | null;
+                /** Whether a track currently exists at the path. */
+                hasTrack(path: string): boolean;
+                /** Removes a track created during the current operation. */
+                removeTrack(path: string): void;
+                /** Marks the Timeline document as modified. */
+                markModified(): void;
+                /** Cancels a pending modification scheduled by the built-in path. */
+                cancelPendingModification(): void;
+                /** Notifies the host that a key value changed. */
+                notifyKeyChanged(key: TimelineKey): void;
+            }
+
+            /** Context passed before the Timeline performs its built-in add-key operation. */
+            interface TimelineCustomAddKeyContext {
+                path: string;
+                frame: number;
+                /** Optional value explicitly supplied by the caller. */
+                value?: TimelinePropertyValue;
+                operations: TimelineCustomAddKeyOperations;
+            }
+
+            /** Result returned when a custom add-key hook handled the operation. */
+            interface TimelineCustomAddKeyResult {
+                /** Keys created or updated by the custom operation. */
+                keys: TimelineKey[];
+            }
+
+            /** Context emitted after keys are removed from a layer. */
+            interface TimelineCustomKeysRemovedContext {
+                path: string;
+                layer: TimelineLayer;
+                /** Keys removed by the operation. */
+                keys: TimelineKey[];
+            }
+
+            /**
+             * Optional host semantics for opaque values and specialized key creation.
+             * Numeric, string, and boolean data do not require an adapter.
+             */
+            interface TimelineCustomValueAdapter {
+                /** Creates a key value for an opaque host type. Return `null` to use the built-in path. */
+                createKey?(context: TimelineCustomKeyContext): TimelineKey | null;
+                /** Interpolates an opaque value. Return `null` when the segment is unsupported. */
+                interpolate?(context: TimelineCustomInterpolationContext): TimelineCustomValueResult | null;
+                /** Converts an evaluated value to a host-defined display representation. */
+                formatEvaluatedValue?(context: TimelineCustomFormatContext): TimelineCustomValueResult | null;
+                /** Handles add-key behavior before the built-in implementation. */
+                beforeAddKey?(context: TimelineCustomAddKeyContext): TimelineCustomAddKeyResult | null;
+                /** Receives removed keys after the built-in removal operation. */
+                afterRemoveKeys?(context: TimelineCustomKeysRemovedContext): void;
+                /** Whether a track may update a key from the host's current property value. */
+                canUpdateFromCurrentValue?(path: string, layer: TimelineLayer): boolean;
+                /** Whether evaluation must use an exact key instead of interpolation. */
+                useExactKey?(path: string): boolean;
+                /** Whether adjacent keys at an exact frame participate in matching. */
+                matchAdjacentKeysAtExactFrame?(path: string): boolean;
+            }
+
+            /**
+             * Host boundary for notifications, menus, value access, and
+             * extension drawing. Every hook is optional.
+             */
+            interface TimelineActions {
+                /** Called with the new playhead position. */
+                onCurrentFrameChange?(frame: number): void;
+                /** Called after Timeline data is modified; `key` identifies the changed key when available. */
+                onDataModified?(key?: TimelineKey): void;
+                /** Called when a grouped document edit begins or ends. */
+                onEditTransactionChange?(active: boolean): void;
+                /** Called after a scheduled Timeline render completes. */
+                onRenderFinished?(): void;
+                /** Called with the new playback state. */
+                onPlaybackChange?(playing: boolean): void;
+                /** Called with the new document frame rate. */
+                onFpsChange?(fps: number): void;
+                /** Called after switching between Frame and Curve modes. */
+                onModeChange?(mode: TimelineMode): void;
+                /** Called with the complete event-marker selection. */
+                onEventSelectionChange?(selection: readonly TimelineEvent[]): void;
+                /** Called with the complete selected track-path list. */
+                onLayerSelectionChange?(paths: readonly string[]): void;
+                /** Called with the complete selected keyframe list. */
+                onKeySelectionChange?(selection: readonly TimelineKeySelection[]): void;
+                /** Called once after a range move or trim is committed. */
+                onRangeModified?(change: TimelineRangeChange): void;
+                /**
+                 * Called for each accepted range preview during a pointer gesture and
+                 * once with the original values when a rejected drop is restored.
+                 */
+                onRangeChanging?(change: TimelineRangeChange): void;
+                /** Called after the selected range IDs change. */
+                onRangeSelectionModified?(selection: readonly TimelineRangeSelection[]): void;
+                /**
+                 * Adjusts or validates a range preview. Return corrected `start` and
+                 * `end` values to accept it, or `null` to reject the drop. A rejected
+                 * cross-track preview still follows the pointer and is restored when
+                 * the pointer is released.
+                 */
+                constrainRangeEdit?(change: TimelineRangeChange): Pick<TimelineRangeChange, "start" | "end"> | null;
+                /** Draws host-specific track content. The renderer clips it to contentRect. */
+                drawFrameOverlay?(context: TimelineFrameOverlayContext): void;
+                /** Draws host-specific ruler content. The renderer clips it to the ruler area. */
+                drawFrameRulerOverlay?(context: TimelineFrameOverlayContext): void;
+                /**
+                 * Begins a host-owned pointer gesture over frame or ruler content.
+                 * Return `null` to let the built-in Timeline interaction continue.
+                 */
+                beginFrameOverlayPointer?(context: TimelineFramePointerContext): TimelineFramePointerSession | null;
+                /** Shows a host-owned context menu for a range. */
+                onRangeContextMenu?(context: TimelineRangeContextMenuContext): void;
+                /** Shows a host-owned context menu for frame content not handled by a range. */
+                onFrameContextMenu?(context: TimelineFramePointerContext): void;
+                /** Serializes selected host ranges for the system clipboard. */
+                getRangeClipboardText?(selection: readonly TimelineRangeSelection[]): string | null;
+                /** Applies a host-owned range clipboard payload. Return `true` when handled. */
+                onPasteRanges?(context: TimelineRangePasteContext): boolean;
+                /** Removes selected host ranges. Timeline clears its range selection afterward. */
+                onRemoveRanges?(selection: readonly TimelineRangeSelection[]): void;
+                /** Returns `true` to accept an external drag over the time area. */
+                onFrameDragOver?(context: TimelineFrameDropContext): boolean;
+                /** Applies an accepted external drop. */
+                onFrameDrop?(context: TimelineFrameDropContext): void;
+                /** Returns the host's current property value for a canonical path. */
+                getCurrentValue?(path: string): TimelineKey["val"] | null;
+                /**
+                 * Called after Timeline finishes removing selected property tracks.
+                 * The host should restore source values that preview evaluation may
+                 * have applied to live objects. Timeline treats this as a notification
+                 * and does not await asynchronous restoration.
+                 */
+                onRestoreSourcePropertyValues?(): void;
+                /** Returns whether a property track may be removed. */
+                confirmRemovePropertyTrack?(property: string): boolean | Promise<boolean>;
+                /** Creates a host property layer requested by the Timeline. */
+                onCreateLayer?(data: TimelineCreateLayerRequest): void;
+                /** Returns property-key names available below a canonical path. */
+                getAllPropertyKeys?(path: string): string[] | null;
+                /** Optional semantics for opaque host values such as spatial paths. */
+                customValueAdapter?: TimelineCustomValueAdapter;
+            }
+
+            /** Adjacent keys surrounding an evaluated frame. */
+            interface StartEndKeys {
+                start: TimelineKey | null;
+                end: TimelineKey | null;
+            }
+
+            /** Current editor state returned without exposing the Canvas implementation. */
+            interface TimelineEditorSnapshot {
+                /** Current playhead position in frames. */
+                position: number;
+                /** Current visual editing mode. */
+                mode: TimelineMode;
+                /** Computed document length in frames. */
+                totalFrame: number;
+                /** Uniform track-row height in CSS pixels. */
+                rowHeight: number;
+                /** Whether data editing is disabled. */
+                readOnly: boolean;
+                /** Whether the document has uncommitted changes. */
+                modified: boolean;
+                /** Whether playback is active. */
+                playing: boolean;
+                /** Current document frame rate. */
+                fps: number;
+            }
+
+            /** Generic mutable-document operations owned by Timeline. */
+            interface TimelineDocumentHandle {
+                /** Returns the mutable document supplied through {@link TimelineEditorProps.data}. */
+                getData(): TimelineDocument;
+                /** Returns the document prepared for persistence, including derived duration/event times. */
+                getSaveData(): TimelineDocument;
+                /** Resolves an existing track by canonical path. */
+                getLayer(path: string): TimelineLayer | null;
+                /** Resolves an existing key at an exact frame. */
+                getKey(path: string, frame: number): TimelineKey | null;
+                /** Performs the normal Timeline add-key operation, including history and rendering. */
+                addKey(path: string, frame?: number, value?: TimelinePropertyValue): TimelineKey[] | null;
+                /** Writes through Timeline's key mutation rules without forcing an immediate render. */
+                writeKey(path: string, frame?: number, value?: TimelinePropertyValue): TimelineKey[] | null;
+                /** Removes a complete track. */
+                removeTrack(path: string): boolean;
+                /** Returns the keys surrounding an evaluated frame. */
+                getAdjacentKeys(path: string, frame?: number): StartEndKeys | null;
+                /** Replaces a canonical path. */
+                renamePath(path: string, newPath: string): boolean;
+                /** Renames one path segment and updates descendants. */
+                renameSegment(path: string, newName: string): boolean;
+                /** Evaluates all Timeline values at a frame. */
+                evaluate(frame?: number): TimelineEvaluatedFrame | null;
+                /** Evaluates one canonical path at a frame. */
+                evaluatePath(path: string, frame?: number): TimelineValue;
+                /** Visits evaluated values without allocating a value map. */
+                visitValues(visitor: TimelineFrameValueVisitor, frame?: number): string | null;
+                /** Updates the document frame rate. */
+                setFps(fps: number): void;
+            }
+
+            /** Generic track/key/event selection operations owned by Timeline. */
+            interface TimelineSelectionHandle {
+                isTrackSelected(path: string): boolean;
+                getTracks(includeDirectoryTracks?: boolean): string[];
+                setTracks(paths: readonly string[]): void;
+                clearTracks(path?: string): boolean;
+                selectTrackKeys(): void;
+                removeSelectedTracks(): void;
+                clearEventSelection(): void;
+            }
+
+            /** Host-facing description of one visible Timeline row. */
+            interface TimelineTrackRow {
+                /** Stable row identity. It currently matches {@link path}. */
+                id: string;
+                /** Canonical path used for data lookup and selection. */
+                path: string;
+                /** Display label. */
+                label: string;
+                /** Suggested horizontal label indentation in CSS pixels. */
+                labelIndent: number;
+                /** Hierarchy depth. */
+                depth: number;
+                /** Whether the row owns expandable children. */
+                directory: boolean;
+                /** Whether a directory row is expanded. */
+                opened: boolean;
+                /** Whether the track is selected. */
+                selected: boolean;
+            }
+
+            /** Geometry shared between Timeline time content and a host-owned row list. */
+            interface TimelineTrackLayout {
+                /** Visible rows in render order. */
+                rows: readonly TimelineTrackRow[];
+                /** Uniform row height in CSS pixels. */
+                rowHeight: number;
+                /** Canvas y-coordinate where track content begins. */
+                contentTop: number;
+                /** Visible track-content height in CSS pixels. */
+                viewportHeight: number;
+                /** Positive vertical scroll offset in CSS pixels. */
+                scrollTop: number;
+                /** Total scrollable row-content height in CSS pixels. */
+                contentHeight: number;
+            }
+
+            /** Imperative operations exposed by the React {@link TimelineEditor}. */
+            interface TimelineEditorHandle {
+                readonly document: TimelineDocumentHandle;
+                readonly selection: TimelineSelectionHandle;
+                /** Returns a host-neutral editor snapshot. */
+                getSnapshot(): TimelineEditorSnapshot;
+                /** Sets the persistence dirty flag without changing the document. */
+                setModified(modified: boolean): void;
+                /** Moves the playhead to an absolute frame position. */
+                setPosition(position: number): void;
+                /** Switches the visual editing mode. */
+                setMode(mode: TimelineMode): void;
+                /** Centers or reveals one frame position. */
+                focusPosition(position: number): void;
+                /** Fits a frame interval into the viewport. */
+                focusRange(start: number, end: number): void;
+                /** Scrolls vertically to a canonical track path. */
+                focusTrack(path: string): void;
+                /** Fits the complete Timeline document into the viewport. */
+                fitView(): void;
+                /** Returns a detached viewport and selection snapshot. */
+                getViewState(): TimelineViewState;
+                /** Replaces viewport and selection state. */
+                setViewState(viewState: TimelineViewState): void;
+                /** Executes a semantic command independently of physical keyboard shortcuts. */
+                executeCommand(command: TimelineCommand): Promise<boolean>;
+                /** Starts playback from the current frame. */
+                play(loop?: boolean): void;
+                /** Stops playback without changing the current frame. */
+                stop(): void;
+                /** Converts browser client coordinates to Timeline frame and track coordinates. */
+                clientToTimeline(clientX: number, clientY: number): { position: number; path?: string };
+                /** Resolves a track from a Timeline-local vertical coordinate. */
+                getTrackAt(y: number): string | null;
+                /** Returns visible track rows and their shared geometry. */
+                getTrackLayout(): TimelineTrackLayout;
+                /** Synchronizes a host-owned track list's vertical scroll position. */
+                setTrackScrollTop(scrollTop: number): boolean;
+                /** Expands or collapses a directory track. */
+                setTrackOpen(path: string, open: boolean): void;
+                /** Tests whether a track contains a key at an exact frame. */
+                hasTrackKeyAt(path: string, frame: number): boolean;
+                /** Returns the computed Timeline key color for a track. */
+                getTrackKeyColor(path: string): string;
+                /** Converts a frame position to seconds or a formatted time label. */
+                positionToTime(position: number, formatted?: boolean): number | string;
+            }
+
+            /** Props accepted by the reusable React Timeline editor. */
+            interface TimelineEditorProps {
+                /**
+                 * Native mutable Timeline document. The component reads and edits this
+                 * object directly; no normalized render document is created.
+                 */
+                data?: TimelineDocument | null;
+                /** Change this token after mutating data in place to invalidate caches and render. */
+                dataVersion?: unknown;
+                /** Optional host boundaries for menus, values, and notifications. */
+                actions?: TimelineActions;
+                /** Editor history instance used to record and execute Timeline undo/redo operations. */
+                history?: IDataHistory | null;
+                /** Initial or controlled visual mode. Defaults to `"frame"`. */
+                mode?: TimelineMode;
+                /** Uniform height used by every visible track row, in CSS pixels. */
+                rowHeight?: number;
+                /** Extra scrollable space after the final track row. Defaults to 6 CSS pixels. */
+                trackEndPadding?: number;
+                /** State snapshot restored separately from data. The value is cloned; null resets it. */
+                viewState?: TimelineViewState | null;
+                /** Additional class applied to the Timeline root element. */
+                className?: string;
+                /** Disables data editing while preserving navigation and rendering. */
+                readOnly?: boolean;
+                /** Whether Timeline currently uses live-recording interaction behavior. */
+                recordMode?: boolean;
+                /** Enables built-in tween editing. */
+                tweenEditable?: boolean;
+                /** Enables refreshing keys from {@link TimelineActions.getCurrentValue}. */
+                currentValueUpdate?: boolean;
+                /** Additional class applied to the underlying `<canvas>` element. */
+                canvasClassName?: string;
+            }
+
+            /** Semantic operations understood by Timeline independently of physical keys. */
+            type TimelineCommand = "copy" | "paste" | "undo" | "redo" | "selectAll" | "deleteSelection" | "togglePlayback" | "previousFrame" | "nextFrame" | "insertFrame" | "removeFrame" | "focusSelection";
+
+            /** Reusable React component that owns a Timeline Canvas lifecycle. */
+            const TimelineEditor: React.ForwardRefExoticComponent<TimelineEditorProps & React.RefAttributes<TimelineEditorHandle>>;
+            /** Creates an empty, valid viewport and selection state. */
+            const createTimelineViewState: () => TimelineViewState;
+            /**
+             * Encodes a single track-name segment for use in a canonical Timeline path.
+             * Canonical paths use `.` between hierarchy segments and `::` before the
+             * property hierarchy. Literal dots in names must be encoded with this function.
+             */
+            const encodeTimelinePathSegment: (name: string) => string;
+            /** Decodes a track name returned as one segment of a canonical Timeline path. */
+            const decodeTimelinePathSegment: (name: string) => string;
+            /** Returns the hierarchy portion before a canonical path's `::` property separator. */
+            const getTimelineNamePath: (path: string) => string;
+            /** Bundled component CSS. TimelineEditor registers it automatically. */
+            const styles: string;
+        }
+
         export type RenderTemplateOptions = {
             /**
              * Whether to escape html characters. Default is false.
@@ -1272,7 +2131,6 @@ declare global {
          *
          * Typical usage from a panel:
          * ```tsx
-         * reactDOM.adoptStyles(IEditor.StateGraph.styles);
          * reactDOM.render(
          *   <IEditor.StateGraph.StateGraphEditor
          *     nodes={nodes} edges={edges}
@@ -1282,7 +2140,7 @@ declare global {
          * );
          * ```
          */
-        export namespace StateGraphApi {
+        export namespace IStateGraph {
             interface XY {
                 x: number;
                 y: number;
@@ -1356,12 +2214,13 @@ declare global {
                 onEdgeContextMenu?(id: string, ev: React.MouseEvent): void;
                 onPaneContextMenu?(ev: React.MouseEvent, at: XY): void;
                 onDeleteSelection?(): void;
-                apiRef?: React.MutableRefObject<StateGraphEditorApi | null>;
+                apiRef?: React.RefObject<StateGraphEditorApi | null>;
                 className?: string;
             }
 
             // --- runtime values ---
             const StateGraphEditor: (props: StateGraphEditorProps) => React.ReactElement;
+            /** Bundled component CSS. StateGraphEditor registers it automatically. */
             const styles: string;
             const NODE_WIDTH: number;
             const NODE_HEIGHT: number;
@@ -2246,6 +3105,44 @@ declare global {
             onCreate?(): void | Promise<void>;
         }
 
+        /** Input for selecting project font assets or system/custom fonts. */
+        export interface FontInputProps {
+            /** Font text, asset reference, resolved asset, or null for an empty value. */
+            value?: string | IAssetInfo | null;
+            /** Disables selection, drag/drop, keyboard clearing, and paste. */
+            disabled?: boolean;
+            /** Whether built-in editor font assets can be selected. Defaults to true. */
+            allowInternalAssets?: boolean;
+            /** Whether built-in GUI font assets can be selected. Defaults to false. */
+            allowInternalGUIAssets?: boolean;
+            /** Text shown as the font type in the empty state. Defaults to Font. */
+            placeholder?: string;
+            /** CSS class for the root element. */
+            className?: string;
+            /** Commits custom text, or a selected font asset when asset is non-null. */
+            onCommit(text: string | null, asset: IAssetInfo | null): void | Promise<void>;
+        }
+
+        /** Input for typing, dropping, and browsing for a filesystem path. */
+        export interface FileInputProps {
+            /** Current path. Null and undefined are displayed as an empty string. */
+            value?: string | null;
+            /** Disables typing, drag/drop, and browsing. */
+            disabled?: boolean;
+            /** Keeps selected and dropped paths absolute. Defaults to project-relative paths. */
+            absolutePath?: boolean;
+            /** Opens an open-file dialog by default, or a save dialog when set to save. */
+            action?: "open" | "save";
+            /** Options forwarded to the native open/save dialog. */
+            dialogOptions?: OpenDialogOptions | SaveDialogOptions;
+            /** Placeholder text or translation key. */
+            placeholder?: string;
+            /** CSS class for the root element. */
+            className?: string;
+            /** Commits the normalized path. Return false to reject the change. */
+            onCommit(value: string): boolean | void;
+        }
+
         /** Color picker input. Color serialization and format conversion are handled by the caller. */
         export interface ColorInputProps {
             /** Current color, or null when a checkable input is unchecked. */
@@ -2478,6 +3375,26 @@ declare global {
             centeredAtOne?: boolean;
         }
 
+        /** Numeric input pair with a dual-handle slider for editing a bounded range. */
+        export interface RangeInputProps {
+            /** Current range as an inclusive start/end pair. */
+            value: readonly [number, number];
+            /** Minimum allowed value and lower slider boundary. */
+            min: number;
+            /** Maximum allowed value and upper slider boundary. */
+            max: number;
+            /** Step used by the slider handles and keyboard controls. Defaults to 0.01. */
+            step?: number;
+            /** Number of digits kept after the decimal point. */
+            fractionDigits?: number;
+            /** Disables both numeric inputs and slider handles. */
+            disabled?: boolean;
+            /** Additional CSS class for the root element. */
+            className?: string;
+            /** Commits the updated start/end pair. */
+            onCommit(value: [number, number]): void;
+        }
+
         /** One option in SelectInput. */
         export interface SelectInputOption {
             /** Serialized option value. */
@@ -2659,10 +3576,28 @@ declare global {
         export namespace ReactComponents {
             /** Injects the editor React theme and component styles into a document. */
             const injectStyles: (doc: Document) => void;
+            /**
+             * Registers component-owned CSS with the nearest IEditor.ReactDOM.
+             * Identical CSS is shared within the same Document or ShadowRoot and is
+             * released after the last mounted consumer unmounts. Call this at the top
+             * level of a React component and keep style arrays identity-stable.
+             *
+             * @example
+             * ```tsx
+             * import styles from "./MyControl.css";
+             * function MyControl() {
+             *     IEditor.React.useStyles(styles);
+             *     return <div className="my-plugin-control" />;
+             * }
+             * ```
+             */
+            const useStyles: (styles: string | readonly string[]) => void;
             /** Switches all injected theme styles in real time. */
             const setTheme: (theme: string) => void;
             /** Subscribes to completed theme changes and returns an unsubscribe callback. */
             const subscribeThemeChange: (listener: ThemeChangeListener) => () => void;
+            /** Returns a version that changes after editor theme or appearance-token changes. */
+            const useThemeVersion: () => number;
             /** Returns the currently active theme name. */
             const getTheme: () => string;
             /** Reads a required CSS px variable from a style, element, document, or the current document when source is null. */
@@ -2681,6 +3616,10 @@ declare global {
             const NodeRefInput: (props: NodeRefInputProps) => React.ReactNode;
             /** Selects and displays an asset reference. */
             const ResourceInput: (props: ResourceInputProps) => React.ReactNode;
+            /** Selects and displays a project font asset or system/custom font. */
+            const FontInput: (props: FontInputProps) => React.ReactNode;
+            /** Edits and browses for a filesystem path. */
+            const FileInput: (props: FileInputProps) => React.ReactNode;
             /** Edits a gui.Color value. */
             const ColorInput: (props: ColorInputProps) => React.ReactNode;
             /** Edits a gradient value. */
@@ -2697,6 +3636,8 @@ declare global {
             const NumericInput: (props: NumericInputProps) => React.ReactNode;
             /** Edits a number with a slider. */
             const NumericInputWithSlider: (props: NumericInputWithSliderProps) => React.ReactNode;
+            /** Edits a bounded numeric range with two number inputs and a dual-handle slider. */
+            const RangeInput: (props: RangeInputProps) => React.ReactNode;
             /** Selects one option from a list. */
             const SelectInput: (props: SelectInputProps) => React.ReactNode;
             /** Adds editor tooltip behavior to children. */
@@ -2738,6 +3679,12 @@ declare global {
             stretchWidth?: boolean;
 
             /**
+             * Whether the React field should fill the remaining vertical space in the Inspector viewport.
+             * The Inspector host observes layout changes and updates the field height automatically.
+             */
+            fillRemainingHeight?: boolean;
+
+            /**
              * Caption display option. Default is "normal".
              * - "normal": Display the caption.
              * - "hidden": Hide the caption but keep the space.
@@ -2754,6 +3701,17 @@ declare global {
              * By default, the widget will have a minimum height. Set this to true to disable the minimum height.
              */
             noMinHeight?: boolean;
+
+            /**
+             * Additional CSS used by a React property field.
+             *
+             * The owning ReactDOM injects these styles once per unique CSS source in
+             * the current Document or ShadowRoot and keeps them alive while at least
+             * one field instance is using them. Plugin styles should still use a
+             * plugin-specific root class because fields share that style root with
+             * other editor UI.
+             */
+            styles?: string;
         }
 
         export interface IPropertyField {
@@ -3260,6 +4218,11 @@ declare global {
             renderToolbar?(): ReactNode;
 
             /**
+             * React renderer for information displayed below the preview canvas.
+             */
+            renderInfo?(): ReactNode;
+
+            /**
              * Test if the panel can accept the asset.
              */
             accept(asset: IAssetInfo): boolean;
@@ -3415,6 +4378,14 @@ declare global {
             isPanelShowing(panelId: string): boolean;
 
             /**
+             * Whether a panel is currently the only tab in the only grid of a popup
+             * window.
+             * @param panelId The panel id.
+             * @returns True if the panel is alone in a single-grid popup, otherwise false.
+             */
+            isPanelAloneInSingleGridPopup(panelId: string): boolean;
+
+            /**
              * Get the active panel in a grid wich contains the sepecified panel.
              * @param panelId The panel id.
              * @return The active panel id.
@@ -3490,6 +4461,12 @@ declare global {
             deepCloneObj(obj: any): any;
 
             /**
+             * Creates a cycle-free snapshot containing only primitives, arrays and plain objects.
+             * Throws when the value contains cycles or unsupported runtime objects.
+             */
+            clonePlainData<T>(value: T): T;
+
+            /**
              * Merge two objects. 
              * 
              * If a property with the same name exists in both objects, and the value of it is an object, the two objects will be merged recursively.
@@ -3559,7 +4536,14 @@ declare global {
             getDataByPath(obj: any, datapath: ReadonlyArray<string>, pathLen?: number): any;
 
             /**
-             * Whether an object is empty. A empty object has no properties.
+             * Whether a value has enumerable string-keyed properties.
+             * @param value The value to inspect.
+             * @param ignoreEditorInternal Whether properties prefixed with `_$` should be ignored.
+             */
+            hasEnumerableProperties(value: unknown, ignoreEditorInternal?: boolean): boolean;
+
+            /**
+             * Whether an object has no enumerable properties other than editor-internal properties prefixed with `_$`.
              * @param obj The object to check.
              * @returns True if the object is empty, otherwise false. 
              */
@@ -3595,6 +4579,7 @@ declare global {
              */
             assignObject(target: any, source: any): any;
         }
+
         export interface IFetchResponseTypeMap {
             "text": string;
             "json": any;
@@ -4229,7 +5214,15 @@ declare global {
              * @return The response of the message. 
              */
             invoke(channel: string, ...args: any[]): Promise<any>;
+
+            /**
+             * Check if the object is a node in the scene.
+             * @param node The object to check.
+             * @return True if the object is a node in the scene; otherwise, false.
+             */
+            isNode(node: any): boolean;
         }
+
         export var PrefabOverridesKey: symbol;
 
         export enum NodeFeatures {
@@ -5739,11 +6732,10 @@ declare global {
          * const store = IEditor.Flow.createGraphStore(initialGraph);
          * const registry = new IEditor.Flow.NodeRegistry(myDefs);
          * const portTypes = new IEditor.Flow.PortTypeRegistry(myTypes);
-         * reactDOM.adoptStyles(IEditor.Flow.styles);
          * reactDOM.render(<IEditor.Flow.GraphEditor store={store} registry={registry} portTypes={portTypes} />);
          * ```
          */
-        export namespace FlowApi {
+        export namespace IFlow {
             interface XY {
                 x: number;
                 y: number;
@@ -5955,7 +6947,7 @@ declare global {
                 /** Open AddNodeMenu directly when right-clicking empty canvas. */
                 directAddNodeMenuOnCanvasContextMenu?: boolean;
                 /** Receives an imperative handle (focus a node, …) once mounted. */
-                controllerRef?: React.MutableRefObject<GraphEditorApi | null>;
+                controllerRef?: React.RefObject<GraphEditorApi | null>;
                 /** Show the minimap overview. Defaults to false. */
                 showMiniMap?: boolean;
                 minZoom?: number;
@@ -6031,6 +7023,7 @@ declare global {
             const nextId: (prefix?: string) => string;
             const findNode: (data: GraphData, id: string) => GraphNode | undefined;
             const linksOfPort: (data: GraphData, nodeId: string, portId: string) => GraphLink[];
+            /** Bundled component CSS. GraphEditor registers it automatically. */
             const styles: string;
 
             const createDocStore: <T extends object>(initial: T, versionTracker?: IVersionTracker) => DocStore<T>;
@@ -6116,48 +7109,13 @@ declare global {
         /** Visual density used by the shared file tab bar component. */
         export type FileTabBarViewVariant = "heavy" | "light" | "weak";
 
-        /** Shared file tab bar model exposed to React panels. */
-        export interface IFileTabBarItemSnapshot {
-            /**
-             * Original tab information.
-             */
-            tab: IFileTabInfo;
-
-            /**
-             * Display title of the tab.
-             */
-            title: string;
-
-            /**
-             * Display path or tooltip of the tab.
-             */
-            path: string;
-
-            /**
-             * Display icon of the tab.
-             */
-            icon: string;
-        }
-
-        /**
-         * Snapshot used by React views to render a file tab bar.
-         */
-        export interface IFileTabBarSnapshot {
-            /**
-             * Tabs in display order.
-             */
-            items: IFileTabBarItemSnapshot[];
-
-            /**
-             * Index of the selected tab.
-             */
-            selectedIndex: number;
-        }
-
         /**
          * File tab bar interface
          */
         export interface IFileTabBar {
+            /** Release the native context menu and all retained callbacks. */
+            dispose(): void;
+
             /**
              * Called when a tab is selected.
              * @param tab The selected tab.
@@ -6239,47 +7197,10 @@ declare global {
             enableMenu: boolean;
 
             /**
-             * Subscribe to tab bar snapshot changes.
-             * @param cb The callback to invoke after the snapshot changes.
-             * @returns A function that removes the callback.
-             */
-            subscribe(cb: () => void): () => void;
-
-            /**
-             * Get the current snapshot for React rendering.
-             * @returns The current tab bar snapshot.
-             */
-            getSnapshot(): IFileTabBarSnapshot;
-
-            /**
              * Refresh the display information of a tab.
              * @param tabId The id of the tab to update.
              */
             updateUI(tabId: string): void;
-
-            /**
-             * Select a tab as if it was clicked by the user.
-             * @param tabId The id of the tab to select.
-             */
-            clickTab(tabId: string): void;
-
-            /**
-             * Close a tab as if it was middle-clicked by the user.
-             * @param tabId The id of the tab to close.
-             */
-            middleClickTab(tabId: string): void;
-
-            /**
-             * Close a tab as if its close button was clicked by the user.
-             * @param tabId The id of the tab to close.
-             */
-            clickTabCloseButton(tabId: string): void;
-
-            /**
-             * Show the context menu for a tab.
-             * @param tabId The id of the tab that owns the menu.
-             */
-            showContextMenu(tabId: string): void;
 
             /**
              * Move a tab to a new display index.
@@ -6287,13 +7208,6 @@ declare global {
              * @param insertIndex The target insertion index.
              */
             moveTab(tabId: string, insertIndex: number): void;
-
-            /**
-             * Move a tab before another tab.
-             * @param tabId The id of the tab to move.
-             * @param beforeTabId The id of the tab before which the moved tab should be inserted.
-             */
-            moveTabBefore(tabId: string, beforeTabId: string): void;
 
             /**
              * Query to close all tabs.
@@ -6314,7 +7228,7 @@ declare global {
          */
         export interface IFileTabBarViewProps {
             /**
-             * File tab bar model to render.
+             * File tab bar model created by `IEditor.React.FileTabBar`.
              */
             tabBar: IFileTabBar;
 
@@ -7921,6 +8835,15 @@ declare global {
             function getPath(fromObj: Object, toObj: Object, result?: Array<string>): Array<string>;
 
             /**
+             * Find the path from fromObj to the object that satisfies the predicate. Returns null if it fails.
+             * @param fromObj The source object.
+             * @param predicate The predicate function to test each object. If the function returns true, the object is considered a match.
+             * @param result The result array. If provided, the result will be pushed into this array.
+             * @returns The object that satisfies the predicate, or null if not found.
+             */
+            function findPath(fromObj: Object, predicate: (obj: any) => boolean, result?: Array<string>): any | null;
+
+            /**
              * Execute a function, and any modifications to watched objects within this function will not trigger change callback functions.
              * @param callback The function to execute.
              */
@@ -8106,6 +9029,16 @@ declare global {
             dispose(): void;
         }
 
+        export type DataHistoryItemAction = "edit" | "undo" | "redo";
+
+        export type DataHistoryItemAppliedHandler = (
+            target: any,
+            datapath: ReadonlyArray<string>,
+            value: any,
+            oldValue: any,
+            action: DataHistoryItemAction,
+        ) => void;
+
         /**
          * Interface for version tracking
          */
@@ -8135,6 +9068,13 @@ declare global {
              * The changed event. It will be triggered when the data is changed, undone or redone.
              */
             readonly onChanged: IDelegate<() => void>;
+
+            /**
+             * Triggered synchronously for every accepted edit and for every item applied
+             * by undo or redo. Unlike `onChanged`, this event is not delayed until a
+             * history batch is packed.
+             */
+            readonly onItemApplied: IDelegate<DataHistoryItemAppliedHandler>;
 
             /**
              * If the undo/redo is processing.
@@ -8256,6 +9196,7 @@ declare global {
              */
             clearGroup(group: number): boolean;
         }
+
         /**
          * Interface for data components.
          */
@@ -9910,6 +10851,15 @@ declare global {
             arrayActions?: Array<"append" | "insert" | "delete" | "move">;
 
             /**
+             * Applicable to array type properties. Defines an optional header and proportional width for each column
+             * rendered by a compound array-element inspector. Width values are percentages and are normalized when
+             * their total is not exactly 100.
+             *
+             * Use "i18n:<key>" or "i18n:<file-id>:<key>" for localized captions.
+             */
+            arrayColumns?: Array<{ caption: string; width: number }>;
+
+            /**
              * Applicable to array or dictionary type properties. Here you can define the properties of array/dictionary elements.
              */
             elementProps?: Partial<FPropertyDescriptor>;
@@ -10661,9 +11611,7 @@ declare global {
             private _shadowRoot;
             private _reactRoot;
             private _mountPoint;
-            private _cssSources;
-            private _sheets;
-            private _styleElements;
+            private _styleHost;
             private _sheetDocument;
             private _useShadow;
             private _wheelTarget;
@@ -10706,15 +11654,7 @@ declare global {
              * document (e.g. Dialog popup in a new Electron window).
              */
             protected onEnable(): void;
-            private _addSheet;
-            private _applySheets;
-            private _rebuildSheets;
-            private _createSheet;
-            private _ensureSheetsDocument;
             private _handleNativeWheel;
-            private _addStyleElement;
-            private _ensureStylesDocument;
-            private _rebuildStyleElements;
             /**
              * React hook for embedding a FairyGUI Widget inside React.
              *
@@ -11297,6 +12237,7 @@ declare global {
                 ani?: boolean;
                 setFirst?: boolean | IPropertyField;
             };
+            styles?: string;
         }
         export class PropertyField implements IPropertyField {
             inspector: IDataInspector;
@@ -11344,39 +12285,27 @@ declare global {
             create(): IPropertyFieldCreateResult;
             refresh(): void;
             render(): import("react/jsx-runtime").JSX.Element;
+            /**
+             * Resolves the enum source displayed by this field.
+             * Override this method to provide enum items dynamically.
+             * @returns The resolved enum items.
+             */
             protected resolveEnumSource(): unknown[];
+            private resolveEnumSourceFor;
+            /**
+             * Resolves the value represented by an enum source item.
+             * @param item The enum source item.
+             * @param index The index of the item in the resolved enum source.
+             * @returns The value submitted when the item is selected.
+             */
             protected getEnumItemValue(item: unknown, index: number): any;
-            private resolveEnumSourceDirectFor;
             private formatEnumItems;
             private formatEnumItemsFor;
             private getEnumItemValueFor;
             private isEnumObject;
             private createEnumItem;
+            private isSelectedValue;
             private toSubmitValue;
-        }
-
-        export class ButtonsField extends PropertyField {
-            create(): IPropertyFieldCreateResult;
-            render(): React.ReactNode;
-            getButtons(): IPropertyButtonInfo[];
-            runButton(button: IPropertyButtonInfo, index?: number, element?: HTMLElement): Promise<void>;
-            getButtonSelected(button: IPropertyButtonInfo): boolean;
-            private toggleButton;
-            protected handleButtonEvent(button: IPropertyButtonInfo, element?: HTMLElement): Promise<boolean>;
-        }
-
-        export class VecField extends PropertyField {
-            create(): IPropertyFieldCreateResult;
-            render(): import("react/jsx-runtime").JSX.Element;
-            private getAxisTitle;
-            private getVectorSize;
-            private getAxes;
-            private getAxisValue;
-            private setAxisValue;
-            private setMemberValue;
-            private setStringValue;
-            private setStructuredValue;
-            private setHasValue;
         }
 
         export type DictionaryModelField = PropertyField & {
@@ -11396,7 +12325,17 @@ declare global {
             refresh(): void;
             refreshChildren(): void;
             render(): React.ReactNode;
+            /**
+             * Provides the initial key shown when adding a dictionary entry.
+             * @param _field The dictionary field being edited.
+             * @returns The initial key, or an empty string when no key is suggested.
+             */
             protected getInitialKey(_field: DictionaryModelField): string;
+            /**
+             * Creates a custom add control for the dictionary toolbar.
+             * @param _field The dictionary field being edited.
+             * @returns The custom control, or `null` to use the built-in add button.
+             */
             protected getCustomAddButton(_field: DictionaryModelField): ReactNode;
             addDictionaryEntry(key: string): boolean;
             deleteDictionaryEntry(key: string): boolean;
@@ -11406,7 +12345,17 @@ declare global {
             syncDynamicChildren(): boolean;
             private refreshDynamicChild;
             private clearDynamicChildren;
+            /**
+             * Resolves the caption displayed for a dictionary entry.
+             * @param key The dictionary entry key.
+             * @returns The entry caption.
+             */
             protected getElementCaption(key: string): string;
+            /**
+             * Resolves the help text displayed for a dictionary entry.
+             * @param key The dictionary entry key.
+             * @returns The entry help text.
+             */
             protected getElementTips(key: string): string;
             private takeDynamicChild;
         }
@@ -11417,7 +12366,16 @@ declare global {
             refresh(): void;
             refreshChildren(): void;
             render(): React.ReactNode;
-            protected getToolbarButtons(): ReactNode;
+            /**
+             * Renders subclass-specific controls alongside the built-in collection toolbar controls.
+             * Override this method instead of render() to preserve the standard collection behavior and layout.
+             */
+            protected renderExtraToolbarButtons(): ReactNode;
+            /**
+             * Handles a request to append an element to the array.
+             * Override this method to provide a custom value picker or add workflow.
+             * @param anchor The add button used to anchor any related UI.
+             */
             protected onAddElement(anchor: HTMLElement): void | Promise<void>;
             appendArrayElement(): boolean;
             insertArrayElement(index?: number, elementValue?: unknown, elementPropOverride?: FPropertyDescriptor): boolean;
@@ -11429,7 +12387,17 @@ declare global {
             syncDynamicChildren(): boolean;
             private refreshDynamicChild;
             private clearDynamicChildren;
+            /**
+             * Resolves the caption displayed for an array element.
+             * @param index The array element index.
+             * @returns The element caption.
+             */
             protected getElementCaption(index: number): string;
+            /**
+             * Resolves the help text displayed for an array element.
+             * @param index The array element index.
+             * @returns The element help text.
+             */
             protected getElementTips(index: number): string;
             private takeDynamicChild;
         }
@@ -11443,15 +12411,62 @@ declare global {
             refresh(): void;
             refreshChildren(): void;
             render(): React.ReactNode;
+            /**
+             * Renders subclass-specific controls alongside the built-in object toolbar controls.
+             * Override this method instead of render() to preserve the standard object behavior and layout.
+             */
             protected renderExtraToolbarButtons(): React.ReactNode;
             showObjectActionMenu(field: PropertyField, anchor: HTMLElement): void;
-            runToolbarButton(field: PropertyField, button: any, index: number): void;
             onClickCreateInstance(typeName: string): void;
             private syncObjectChildren;
             private getObjectTypeName;
             private clearObjectChildren;
             private getDefaultObjectMenu;
             onClickSetNull(): void;
+        }
+
+        export class InfoField extends PropertyField {
+            create(): IPropertyFieldCreateResult;
+            refresh(): void;
+            render(): React.ReactNode;
+            /**
+             * Resolves the informational text displayed by this field.
+             * Override this method to provide text from a custom source.
+             * @returns The informational text, or an empty string to hide the field.
+             */
+            protected getInfoText(): string;
+            private getInfoIcon;
+        }
+
+        export class ButtonsField extends PropertyField {
+            create(): IPropertyFieldCreateResult;
+            render(): React.ReactNode;
+            getButtons(): IPropertyButtonInfo[];
+            runButton(button: IPropertyButtonInfo, index?: number, element?: HTMLElement): Promise<void>;
+            getButtonSelected(button: IPropertyButtonInfo): boolean;
+            private toggleButton;
+            /**
+             * Handles the custom event configured for a property button.
+             * Override this method to route button events to a custom target.
+             * @param button The button descriptor whose event is being dispatched.
+             * @param element The HTML button element that initiated the event.
+             * @returns Whether the event was handled.
+             */
+            protected handleButtonEvent(button: IPropertyButtonInfo, element?: HTMLElement): Promise<boolean>;
+        }
+
+        export class VecField extends PropertyField {
+            create(): IPropertyFieldCreateResult;
+            render(): import("react/jsx-runtime").JSX.Element;
+            private getAxisTitle;
+            private getVectorSize;
+            private getAxes;
+            private getAxisValue;
+            private setAxisValue;
+            private setMemberValue;
+            private setStringValue;
+            private setStructuredValue;
+            private setHasValue;
         }
 
         export class FileInspectorLayout implements IInspectorLayout {
@@ -11564,6 +12579,7 @@ declare global {
         const ClassRegistry: typeof IClassRegistry;
 
         /**
+         * @deprecated
          * The `ListHelper` class is used to help manage lists.
          * @param list The list to manage.
          * @param indexColumn The column name of the index.
@@ -11571,6 +12587,7 @@ declare global {
         const ListHelper: new (list: gui.List, indexColumn?: string) => IListHelper;
 
         /**
+         * @deprecated
          * The `ListInsertionHelper` class is used to help insert items into the list.
          * 
          * This class can highlight the insertion position when a scene node or asset is dragged and dropped into the list, 
@@ -11615,7 +12632,7 @@ declare global {
          * 
          * An iframe is an inline frame that can be used to embed another document within the current HTML document.
          */
-        const WebIFrame: new () => IWebIFrame;
+        const WebIFrame: new (options?: IWebIFrameOptions) => IWebIFrame;
 
         /**
          * The `Conf` class is used to read and write configuration files.
@@ -11797,18 +12814,25 @@ declare global {
         /**
          * The shared graph editing core (React Flow based). Values are accessed
          * as `IEditor.Flow.GraphEditor`, `IEditor.Flow.createGraphStore`, etc.
-         * The corresponding types live under {@link FlowApi} (e.g.
-         * `IEditor.FlowApi.GraphData`, `IEditor.FlowApi.GraphEditorProps`).
+         * The corresponding types live under {@link IFlow} (e.g.
+         * `IEditor.IFlow.GraphData`, `IEditor.IFlow.GraphEditorProps`).
          */
-        const Flow: typeof FlowApi;
+        const Flow: typeof IFlow;
 
         /**
          * The shared *state-machine* graph editor (pinless, straight links with
          * a mid-line arrow). Values are accessed as
          * `IEditor.StateGraph.StateGraphEditor`, `IEditor.StateGraph.styles`, etc.
-         * The corresponding types live under {@link StateGraphApi}.
+         * The corresponding types live under {@link IStateGraph}.
          */
-        const StateGraph: typeof StateGraphApi;
+        const StateGraph: typeof IStateGraph;
+
+        /**
+         * Shared high-performance timeline editor. Runtime values are available
+         * as `IEditor.Timeline.TimelineEditor` and `styles`;
+         * types live under {@link ITimeline}.
+         */
+        const Timeline: typeof ITimeline;
 
         /**
          * References a commonjs module. You can import built-in Node.js modules such as: path, fs, child_process, etc. 
