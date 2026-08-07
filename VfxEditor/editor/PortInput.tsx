@@ -1,7 +1,7 @@
 import * as React from "react";
 
 export function renderPortInput(
-    context: IEditor.FlowApi.PortInputContext,
+    context: IEditor.IFlow.PortInputContext,
 ): React.ReactNode | undefined {
     const { node, port, store, onValueChange } = context;
     if (port.data?.inline !== true)

@@ -75,13 +75,12 @@ export class VfxDocument {
     readonly assetId: string;
     readonly filePath: string;
     readonly fileName: string;
-    readonly graphStore: IEditor.FlowApi.GraphStore;
-    readonly metaStore: IEditor.FlowApi.DocStore<DocumentMeta>;
-    readonly registry: IEditor.FlowApi.MutableNodeRegistry;
+    readonly graphStore: IEditor.IFlow.GraphStore;
+    readonly metaStore: IEditor.IFlow.DocStore<DocumentMeta>;
+    readonly registry: IEditor.IFlow.MutableNodeRegistry;
     readonly adapter: GraphAdapter;
 
     selectedNodeIds: string[] = [];
-    onChange: (() => void) | null = null;
     onModifiedChange: (() => void) | null = null;
 
     private _modified = false;
@@ -95,7 +94,7 @@ export class VfxDocument {
     private constructor(
         asset: IEditor.IAssetInfo,
         data: IVfxGraphData,
-        viewport: IEditor.FlowApi.GraphViewport,
+        viewport: IEditor.IFlow.GraphViewport,
     ) {
         this.assetId = asset.id;
         this.filePath = Editor.assetDb.getFullPath(asset);
@@ -120,15 +119,11 @@ export class VfxDocument {
 
         this._unsubscribers.push(
             this.graphStore.subscribe(() => {
-                if (this.graphStore.transientViewportChange) {
+                if (this.graphStore.transientViewportChange)
                     setGraphViewport(this.assetId, this.graphStore.data.viewport);
-                    return;
-                }
-                this.onChange?.();
             }),
             this.metaStore.subscribe(() => {
                 this.normalizeLinkedGraphProperties();
-                this.onChange?.();
             }),
         );
     }
@@ -186,10 +181,9 @@ export class VfxDocument {
 
     setSelectedNodeIds(ids: string[]): void {
         this.selectedNodeIds = ids.slice();
-        this.onChange?.();
     }
 
-    selectedNode(): IEditor.FlowApi.GraphNode | null {
+    selectedNode(): IEditor.IFlow.GraphNode | null {
         return this.selectedNodeIds.length === 1
             ? this.graphStore.data.nodes.find(node => node.id === this.selectedNodeIds[0]) ?? null
             : null;
@@ -268,7 +262,7 @@ export class VfxDocument {
 
     addPropertyNode(
         propertyName: string,
-        position: IEditor.FlowApi.XY,
+        position: IEditor.IFlow.XY,
     ): string | undefined {
         const node = this.registry.createNode(
             getPropertyNodeTypeId(propertyName),
@@ -277,6 +271,14 @@ export class VfxDocument {
         if (!node)
             return undefined;
         return IEditor.Flow.commands.addNode(this.graphStore, node);
+    }
+
+    findPropertyNode(propertyName: string): string | undefined {
+        return this.graphStore.data.nodes.find(node =>
+            nodeKind(node) === "operator"
+            && node.data.source?.typeId === "getProperty"
+            && node.data.source?.props?.property === propertyName
+        )?.id;
     }
 
     addBlock(contextNodeId: string, typeId: string): void {
@@ -400,7 +402,7 @@ export class VfxDocument {
         }
     }
 
-    handleConnectionChange(link: IEditor.FlowApi.GraphLink): void {
+    handleConnectionChange(link: IEditor.IFlow.GraphLink): void {
         if (parseBlockSlotId(link.to.port))
             this.refreshNode(link.to.node);
     }
@@ -411,10 +413,10 @@ export class VfxDocument {
             if (!node)
                 return;
             this.rebuildNode(node);
-        }, true);
+        }, false);
     }
 
-    typeIdForNode(node: IEditor.FlowApi.GraphNode): string | null {
+    typeIdForNode(node: IEditor.IFlow.GraphNode): string | null {
         const source = node.data.source;
         if (!source)
             return null;
@@ -479,7 +481,6 @@ export class VfxDocument {
         this.graphStore.dispose();
         this.metaStore.dispose();
         closeEditorInfo(this.assetId);
-        this.onChange = null;
         this.onModifiedChange = null;
     }
 
@@ -496,15 +497,30 @@ export class VfxDocument {
     }
 
     private refreshAllNodes(): void {
+        const connectedByNode = new Map<string, Set<string>>();
+        const noConnectedPortIds = new Set<string>();
+        for (const link of this.graphStore.data.links) {
+            if (!parseBlockSlotId(link.to.port))
+                continue;
+            let portIds = connectedByNode.get(link.to.node);
+            if (!portIds) {
+                portIds = new Set<string>();
+                connectedByNode.set(link.to.node, portIds);
+            }
+            portIds.add(link.to.port);
+        }
         this.graphStore.silent(() => {
             for (const node of this.graphStore.data.nodes)
-                this.rebuildNode(node);
-        }, true);
+                this.rebuildNode(node, connectedByNode.get(node.id) ?? noConnectedPortIds);
+        }, false);
     }
 
-    private rebuildNode(node: IEditor.FlowApi.GraphNode): void {
+    private rebuildNode(
+        node: IEditor.IFlow.GraphNode,
+        connectedPortIds?: ReadonlySet<string>,
+    ): void {
         const shaderPorts = node.inputs.filter(port => port.id.startsWith("shaderprop_"));
-        const connectedPortIds = new Set(
+        connectedPortIds ??= new Set(
             this.graphStore.data.links
                 .filter(link => link.to.node === node.id && parseBlockSlotId(link.to.port))
                 .map(link => link.to.port),
@@ -515,6 +531,7 @@ export class VfxDocument {
             this.properties,
             Number(node.data.order) || 0,
             connectedPortIds,
+            false,
         );
         node.typeId = next.typeId;
         node.title = next.title;
@@ -539,19 +556,25 @@ export class VfxDocument {
         const previous = this._lastProps;
         this._normalizingProps = true;
         try {
-            if (props.preWarmTotalTime !== previous.preWarmTotalTime) {
-                if (props.preWarmTotalTime && !props.preWarmStepCount)
-                    props.preWarmStepCount = 1;
-                props.preWarmDeltaTime = props.preWarmStepCount > 0
-                    ? props.preWarmTotalTime / props.preWarmStepCount
-                    : 0;
-            } else if (props.preWarmStepCount !== previous.preWarmStepCount) {
-                props.preWarmDeltaTime = props.preWarmStepCount > 0
-                    ? props.preWarmTotalTime / props.preWarmStepCount
-                    : 0;
-            } else if (props.preWarmDeltaTime !== previous.preWarmDeltaTime) {
-                props.preWarmTotalTime = (props.preWarmStepCount || 0) * (props.preWarmDeltaTime || 0);
-            }
+            // The initiating meta-store mutation already notified subscribers.
+            // Apply its dependent values as one silent normalization so the
+            // inspector reads a coherent result without nested render/history
+            // notifications for each derived field.
+            this.metaStore.silent(() => {
+                if (props.preWarmTotalTime !== previous.preWarmTotalTime) {
+                    if (props.preWarmTotalTime && !props.preWarmStepCount)
+                        props.preWarmStepCount = 1;
+                    props.preWarmDeltaTime = props.preWarmStepCount > 0
+                        ? props.preWarmTotalTime / props.preWarmStepCount
+                        : 0;
+                } else if (props.preWarmStepCount !== previous.preWarmStepCount) {
+                    props.preWarmDeltaTime = props.preWarmStepCount > 0
+                        ? props.preWarmTotalTime / props.preWarmStepCount
+                        : 0;
+                } else if (props.preWarmDeltaTime !== previous.preWarmDeltaTime) {
+                    props.preWarmTotalTime = (props.preWarmStepCount || 0) * (props.preWarmDeltaTime || 0);
+                }
+            }, false);
             this._lastProps = clone(props);
         } finally {
             this._normalizingProps = false;

@@ -3,7 +3,7 @@ import path from "path";
 interface VfxEditorInfo {
     kind: "vfx-editor";
     version: 1;
-    viewport?: IEditor.FlowApi.GraphViewport;
+    viewport?: IEditor.IFlow.GraphViewport;
 }
 
 const cache = new Map<string, VfxEditorInfo>();
@@ -24,7 +24,9 @@ function emptyInfo(): VfxEditorInfo {
 }
 
 function infoPath(projectPath: string, assetId: string): string {
-    return path.join(projectPath, "library", assetId.substring(0, 2), `${assetId}.info`);
+    // AssetImporter.clearLibrary() removes every file whose name starts with
+    // the asset id. Keep editor-only state outside that generated-file prefix.
+    return path.join(projectPath, "library", assetId.substring(0, 2), `vfx-editor-${assetId}.info`);
 }
 
 function normalizeInfo(value: unknown): VfxEditorInfo | null {
@@ -63,8 +65,8 @@ export async function openEditorInfo(assetId: string): Promise<void> {
         return;
     const filePath = infoPath(cachedProjectPath, assetId);
     await IEditor.utils.flushFileWrites(filePath);
-    const source = await IEditor.utils.readJsonAsync(filePath, true);
-    cache.set(assetId, normalizeInfo(source) ?? emptyInfo());
+    const info = normalizeInfo(await IEditor.utils.readJsonAsync(filePath, true));
+    cache.set(assetId, info ?? emptyInfo());
 }
 
 export function closeEditorInfo(assetId: string): void {
@@ -74,8 +76,8 @@ export function closeEditorInfo(assetId: string): void {
 
 export function getGraphViewport(
     assetId: string,
-    legacyViewport?: Partial<IEditor.FlowApi.GraphViewport>,
-): IEditor.FlowApi.GraphViewport {
+    legacyViewport?: Partial<IEditor.IFlow.GraphViewport>,
+): IEditor.IFlow.GraphViewport {
     const info = getInfo(assetId);
     if (info.viewport)
         return IEditor.Flow.normalizeGraphViewport(info.viewport);
@@ -87,7 +89,7 @@ export function getGraphViewport(
 
 export function setGraphViewport(
     assetId: string,
-    viewport: IEditor.FlowApi.GraphViewport,
+    viewport: IEditor.IFlow.GraphViewport,
 ): void {
     const info = getInfo(assetId);
     const next = IEditor.Flow.normalizeGraphViewport(viewport);

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { editorController } from "./Controller";
 import { ContextBody } from "./ContextBody";
 import { t } from "./I18n";
@@ -12,14 +12,17 @@ import { canConnect } from "./NodeRegistry";
 import { renderPortInput } from "./PortInput";
 
 const PORT_COLORS = {
-    flow: "#FFFFFF",
-    number: "#9EFB44",
-    integer: "#1DE0AC",
-    boolean: "#5FD3BC",
+    flow: "var(--bp-type-exec)",
+    number: "var(--bp-type-number)",
+    integer: "var(--bp-type-integer)",
+    boolean: "var(--bp-type-boolean)",
+    string: "var(--bp-type-string)",
+    color: "var(--bp-type-color)",
+    object: "var(--bp-type-object)",
+    any: "var(--bp-type-any)",
     vector2: "#7AD1FF",
     vector3: "#FDC086",
     vector4: "#FFD45E",
-    color: "#E077A4",
     gradient: "#C792EA",
     curve: "#B5784A",
     texture: "#F0883E",
@@ -30,7 +33,7 @@ const PORT_COLORS = {
     other: "#CCCCCC",
 } as const;
 
-const PORT_TYPES: IEditor.FlowApi.PortTypeInfo[] = [
+const PORT_TYPES: IEditor.IFlow.PortTypeInfo[] = [
     { key: "flow", label: "Flow", color: PORT_COLORS.flow },
     { key: "float", label: "Float", color: PORT_COLORS.number },
     { key: "number", label: "Number", color: PORT_COLORS.number },
@@ -38,7 +41,7 @@ const PORT_TYPES: IEditor.FlowApi.PortTypeInfo[] = [
     { key: "uint", label: "UInt", color: PORT_COLORS.integer },
     { key: "bool", label: "Bool", color: PORT_COLORS.boolean },
     { key: "boolean", label: "Bool", color: PORT_COLORS.boolean },
-    { key: "string", label: "String", color: PORT_COLORS.other },
+    { key: "string", label: "String", color: PORT_COLORS.string },
     { key: "vec2", label: "Vector2", color: PORT_COLORS.vector2 },
     { key: "vec3", label: "Vector3", color: PORT_COLORS.vector3 },
     { key: "vec4", label: "Vector4", color: PORT_COLORS.vector4 },
@@ -72,22 +75,23 @@ const PORT_TYPES: IEditor.FlowApi.PortTypeInfo[] = [
     { key: "arcCircle", label: "Arc Circle", color: PORT_COLORS.other },
     { key: "line", label: "Line", color: PORT_COLORS.other },
     { key: "flags", label: "Flags", color: PORT_COLORS.other },
-    { key: "object", label: "Object", color: PORT_COLORS.other },
+    { key: "object", label: "Object", color: PORT_COLORS.object },
     { key: "space", label: "Space", color: PORT_COLORS.other },
-    { key: "Material", label: "Material", color: PORT_COLORS.other },
-    { key: "ShaderBlueprint", label: "ShaderBlueprint", color: PORT_COLORS.other },
-    { key: "any", label: "Any", color: PORT_COLORS.other },
+    { key: "Material", label: "Material", color: PORT_COLORS.object },
+    { key: "ShaderBlueprint", label: "ShaderBlueprint", color: PORT_COLORS.object },
+    { key: "any", label: "Any", color: PORT_COLORS.any },
 ];
 
 export function EditorView(): React.ReactElement {
     useSyncExternalStore(editorController.subscribe, editorController.getSnapshot);
     const portTypes = useMemo(() => new IEditor.Flow.PortTypeRegistry(PORT_TYPES), []);
+    const editorApi = useRef<IEditor.IFlow.GraphEditorApi | null>(null);
     const document = editorController.active;
     const onSelectionChange = useCallback((ids: string[]) => {
         editorController.active?.setSelectedNodeIds(ids);
         editorController.setHistoryScope("graph");
     }, []);
-    const onCanvasDrop = useCallback((info: IEditor.FlowApi.CanvasDropInfo) => {
+    const onCanvasDrop = useCallback((info: IEditor.IFlow.CanvasDropInfo) => {
         if (!document)
             return;
         const data = info.dataTransfer.getData(VFX_PROPERTY_DRAG_MIME)
@@ -127,7 +131,10 @@ export function EditorView(): React.ReactElement {
             ) : (
                 <div className="vfx-workspace">
                     <aside className="vfx-left-host" style={{ width: editorController.leftWidth }}>
-                        <LeftPanel document={document} />
+                        <LeftPanel
+                            document={document}
+                            focusNode={nodeId => editorApi.current?.focusNode(nodeId)}
+                        />
                     </aside>
                     <IEditor.React.ResizeHandle
                         orientation="vertical"
@@ -159,6 +166,7 @@ export function EditorView(): React.ReactElement {
                             initialSelectedNodeIds={document.selectedNodeIds}
                             onNodeSelectionChange={onSelectionChange}
                             historyHotkeys={false}
+                            controllerRef={editorApi}
                         />
                     </main>
                 </div>

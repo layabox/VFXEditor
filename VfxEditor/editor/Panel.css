@@ -95,15 +95,11 @@ button.icon.vfx-property-add {
     min-height: 22px;
     padding: 1px 8px 1px 22px;
     outline: none;
-    cursor: grab;
+    cursor: default;
 }
 
 .vfx-property-list-row.grouped {
     padding-left: 34px;
-}
-
-.vfx-property-list-row:active {
-    cursor: grabbing;
 }
 
 .vfx-property-list-row:hover {

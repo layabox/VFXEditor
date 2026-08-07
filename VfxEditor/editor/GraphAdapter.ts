@@ -38,17 +38,17 @@ import type {
 export type NodeKind = "event" | "context" | "operator";
 export type VfxNodeSource = IVfxEventData | IVfxContextData | IVfxOperatorData;
 
-type GraphData = IEditor.FlowApi.GraphData;
-type GraphLink = IEditor.FlowApi.GraphLink;
-type GraphNode = IEditor.FlowApi.GraphNode;
-type GraphPort = IEditor.FlowApi.GraphPort;
+type GraphData = IEditor.IFlow.GraphData;
+type GraphLink = IEditor.IFlow.GraphLink;
+type GraphNode = IEditor.IFlow.GraphNode;
+type GraphPort = IEditor.IFlow.GraphPort;
 
 export class GraphAdapter {
     constructor(private readonly allocateId: () => number) {}
 
     toGraphData(
         save: IVfxGraphData,
-        editorViewport?: IEditor.FlowApi.GraphViewport,
+        editorViewport?: IEditor.IFlow.GraphViewport,
     ): GraphData {
         const connectedPorts = collectConnectedBlockPorts(save.operators ?? []);
         const nodes: GraphNode[] = [
@@ -299,19 +299,20 @@ export function sourceToGraphNode(
     properties: IVfxPropertyDef[] = [],
     order = 0,
     connectedPortIds: ReadonlySet<string> = new Set(),
+    cloneSource = true,
 ): GraphNode {
     if (kind === "event")
-        return eventToNode(source as IVfxEventData, order);
+        return eventToNode(source as IVfxEventData, order, cloneSource);
     if (kind === "context")
-        return contextToNode(source as IVfxContextData, order, connectedPortIds);
-    return operatorToNode(source as IVfxOperatorData, properties, order);
+        return contextToNode(source as IVfxContextData, order, connectedPortIds, cloneSource);
+    return operatorToNode(source as IVfxOperatorData, properties, order, cloneSource);
 }
 
 export function createNodeSource(
     kind: NodeKind,
     typeId: string,
     id: number,
-    position: IEditor.FlowApi.XY,
+    position: IEditor.IFlow.XY,
 ): VfxNodeSource {
     const definition = kind === "event"
         ? getEventDef(typeId)
@@ -334,7 +335,7 @@ export function nodeKind(node: GraphNode): NodeKind {
     return node.data.kind as NodeKind;
 }
 
-export function canConnect(ctx: IEditor.FlowApi.ConnectionContext): boolean {
+export function canConnect(ctx: IEditor.IFlow.ConnectionContext): boolean {
     if (ctx.fromPort.isExec || ctx.toPort.isExec)
         return !!ctx.fromPort.isExec && !!ctx.toPort.isExec;
     if (ctx.fromPort.dataType === "any" || ctx.toPort.dataType === "any")
@@ -342,7 +343,7 @@ export function canConnect(ctx: IEditor.FlowApi.ConnectionContext): boolean {
     return canConvertType(ctx.fromPort.dataType, ctx.toPort.dataType);
 }
 
-function eventToNode(source: IVfxEventData, order: number): GraphNode {
+function eventToNode(source: IVfxEventData, order: number, cloneSource: boolean): GraphNode {
     const definition = getEventDef(source.typeId);
     return {
         id: String(source.id),
@@ -356,7 +357,7 @@ function eventToNode(source: IVfxEventData, order: number): GraphNode {
         outputs: ports(definition?.flowOutputs, "out", true),
         data: {
             kind: "event",
-            source: clone(source),
+            source: cloneSource ? clone(source) : source,
             order,
             headerColor: definition?.color,
         },
@@ -367,6 +368,7 @@ function contextToNode(
     source: IVfxContextData,
     order: number,
     connectedPortIds: ReadonlySet<string>,
+    cloneSource: boolean,
 ): GraphNode {
     const definition = getContextDef(source.typeId);
     const inputs = ports(definition?.flowInputs, "in", true);
@@ -418,7 +420,7 @@ function contextToNode(
         outputs,
         data: {
             kind: "context",
-            source: clone(source),
+            source: cloneSource ? clone(source) : source,
             order,
             values,
             headerColor: definition?.color,
@@ -430,6 +432,7 @@ function operatorToNode(
     source: IVfxOperatorData,
     properties: IVfxPropertyDef[],
     order: number,
+    cloneSource: boolean,
 ): GraphNode {
     const definition = getOperatorDef(source.typeId);
     const registryType = getOperatorRegistryId(source.typeId);
@@ -474,7 +477,7 @@ function operatorToNode(
         compact: source.typeId === "getProperty",
         data: {
             kind: "operator",
-            source: clone(source),
+            source: cloneSource ? clone(source) : source,
             order,
             values,
             headerColor: definition?.color,

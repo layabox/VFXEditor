@@ -27,7 +27,7 @@ const ADD_BLOCK_MENU_ID = "VfxEditor.Block.Add";
 const BLOCK_MENU_ID = "VfxEditor.Block.Item";
 const SET_ATTRIBUTE_MENU_ID = "VfxEditor.Block.SetAttribute";
 
-export function ContextBody(props: IEditor.FlowApi.NodeBodyProps): React.ReactElement {
+export function ContextBody(props: IEditor.IFlow.NodeBodyProps): React.ReactElement {
     const document = editorController.active;
     const context = props.node.data.source as IVfxContextData;
     const blocks = context?.blocks ?? [];
@@ -430,7 +430,7 @@ function cloneValue<T>(value: T): T {
 }
 
 interface PortTreeNode {
-    port: IEditor.FlowApi.GraphPort;
+    port: IEditor.IFlow.GraphPort;
     children: PortTreeNode[];
 }
 
@@ -440,13 +440,13 @@ function BlockPortTree({
     portCollapseOverrides,
     onToggle,
 }: {
-    flowProps: IEditor.FlowApi.NodeBodyProps;
-    node: IEditor.FlowApi.GraphNode;
+    flowProps: IEditor.IFlow.NodeBodyProps;
+    node: IEditor.IFlow.GraphNode;
     portCollapseOverrides: ReadonlyMap<string, boolean>;
     onToggle(portId: string, collapsed: boolean): void;
 }): React.ReactElement {
     const roots = buildPortTree(node.inputs);
-    const outputNode = {
+    const outputNode: IEditor.IFlow.GraphNode = {
         ...node,
         inputs: [],
     };
@@ -478,8 +478,8 @@ function PortTreeBranch({
     portCollapseOverrides,
     onToggle,
 }: {
-    flowProps: IEditor.FlowApi.NodeBodyProps;
-    node: IEditor.FlowApi.GraphNode;
+    flowProps: IEditor.IFlow.NodeBodyProps;
+    node: IEditor.IFlow.GraphNode;
     branch: PortTreeNode;
     depth: number;
     portCollapseOverrides: ReadonlyMap<string, boolean>;
@@ -489,7 +489,7 @@ function PortTreeBranch({
     const collapsed = hasChildren && (
         portCollapseOverrides.get(branch.port.id) ?? shouldCollapseByDefault(branch)
     );
-    const portNode = {
+    const portNode: IEditor.IFlow.GraphNode = {
         ...node,
         inputs: [branch.port],
         outputs: [],
@@ -552,7 +552,7 @@ function PortTreeBranch({
     );
 }
 
-function buildPortTree(ports: IEditor.FlowApi.GraphPort[]): PortTreeNode[] {
+function buildPortTree(ports: IEditor.IFlow.GraphPort[]): PortTreeNode[] {
     const roots: PortTreeNode[] = [];
     const stack: PortTreeNode[] = [];
     const paths = new Map<string, PortTreeNode>();
@@ -603,8 +603,8 @@ function shouldCollapseByDefault(branch: PortTreeNode): boolean {
         && branch.children.every(child => child.children.length === 0);
 }
 
-function collectDescendantPorts(branch: PortTreeNode): IEditor.FlowApi.GraphPort[] {
-    const result: IEditor.FlowApi.GraphPort[] = [];
+function collectDescendantPorts(branch: PortTreeNode): IEditor.IFlow.GraphPort[] {
+    const result: IEditor.IFlow.GraphPort[] = [];
     for (const child of branch.children) {
         result.push(child.port, ...collectDescendantPorts(child));
     }
@@ -615,8 +615,8 @@ function CollapsedPortProxies({
     flowProps,
     node,
 }: {
-    flowProps: IEditor.FlowApi.NodeBodyProps;
-    node: IEditor.FlowApi.GraphNode;
+    flowProps: IEditor.IFlow.NodeBodyProps;
+    node: IEditor.IFlow.GraphNode;
 }): React.ReactElement {
     const proxyNode = {
         ...node,
@@ -630,7 +630,7 @@ function CollapsedPortProxies({
     );
 }
 
-function proxyPort(port: IEditor.FlowApi.GraphPort): IEditor.FlowApi.GraphPort {
+function proxyPort(port: IEditor.IFlow.GraphPort): IEditor.IFlow.GraphPort {
     return {
         ...port,
         label: "",
@@ -642,9 +642,9 @@ function proxyPort(port: IEditor.FlowApi.GraphPort): IEditor.FlowApi.GraphPort {
 }
 
 function filterNodePorts(
-    node: IEditor.FlowApi.GraphNode,
-    predicate: (port: IEditor.FlowApi.GraphPort) => boolean,
-): IEditor.FlowApi.GraphNode {
+    node: IEditor.IFlow.GraphNode,
+    predicate: (port: IEditor.IFlow.GraphPort) => boolean,
+): IEditor.IFlow.GraphNode {
     return {
         ...node,
         inputs: node.inputs.filter(predicate),

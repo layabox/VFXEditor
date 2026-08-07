@@ -1474,6 +1474,7 @@ declare global {
              */
             setCursor(cursor: string | null): void;
         }
+
         export type SceneNavToolType = "move" | "orbit" | "orbit_focus" | "zoom" | "obj_move" | "obj_rotate" | "obj_scale" | "obj_transform";
 
         export interface ICreateNodeOptions {
@@ -2569,8 +2570,11 @@ declare global {
             /** The graphics object currently being edited in either the 2D or 3D scene. */
             readonly editingGraphics: Readonly<IGraphicsEditingInfo>;
 
-            /** Switches the single graphics object being edited by scene gizmos. */
-            switchEditingGraphics(node: Laya.Node, comp?: Laya.Component, propPath?: ReadonlyArray<string>): void;
+            /**
+             * Switches the single graphics object being edited by scene gizmos.
+             * @param hideStageGrid Whether to hide the stage grid while editing. Default is false.
+             */
+            switchEditingGraphics(node: Laya.Node, comp?: Laya.Component, propPath?: ReadonlyArray<string>, hideStageGrid?: boolean): void;
 
             /**
              * Get a built-in mesh for gizmos.
@@ -2827,7 +2831,7 @@ declare global {
             getMesh(type: Gizmo2DMeshKey): Laya.Mesh2D;
 
             /**
-             * Get a vector graphics manager for drawing gizmos. Only available in onDrawGizmosSelected callback.
+             * @deprecated Dont use vector graphics in 2D gizmos anymore.
              * @param node The node.
              * @returns The gizmos manager.
              */
@@ -2838,8 +2842,9 @@ declare global {
              * @param node Graphics owner node. 
              * @param comp Graphics owner component. Can be null.
              * @param propPath Property path of the graphics. Can be null. 
+             * @param hideStageGrid Whether to hide the stage grid while editing. Default is false.
              */
-            switchEditingGraphics(node: Laya.Node, comp?: Laya.Component, propPath?: ReadonlyArray<string>): void;
+            switchEditingGraphics(node: Laya.Node, comp?: Laya.Component, propPath?: ReadonlyArray<string>, hideStageGrid?: boolean): void;
 
             /**
              * Draw mesh.
@@ -2958,6 +2963,7 @@ declare global {
              */
             drawPolygon(matrix: Laya.Matrix, x: number, y: number, points: number[], color?: Laya.Color, lineWidth?: number, lineColor?: Laya.Color): void;
         }
+
         export interface IGameScene extends IMyScene {
             readonly selection: ReadonlyArray<Laya.Node>;
             readonly allNodes: Map<string, WeakRef<Laya.Node>>;
@@ -3942,6 +3948,7 @@ declare global {
              */
             invalidateGizmos(): void;
         }
+
         export interface ID3Manager {
             /**
              * Whether to show the grid line in the scene.
@@ -4344,6 +4351,200 @@ declare global {
              */
             buildScriptBundle(defAsset: IAssetInfo, outDir: string, options?: ICodeBuildOptions): Promise<Array<string>>;
         }
+        /** Public types for the built-in Clipper2 polygon library. */
+        export namespace Clipper2 {
+            export interface PointD {
+                x: number;
+                y: number;
+            }
+
+            export type FillRule = 0 | 1 | 2 | 3;
+            export type ClipType = 0 | 1 | 2 | 3 | 4;
+            export type PathType = 1 | 2;
+            export type JoinType = 0 | 1 | 2 | 3;
+            export type EndType = 0 | 1 | 2 | 3 | 4;
+            export type PointInPolygonResult = 0 | 1 | 2;
+
+            export interface IPathD extends Iterable<PointD> {
+                push(...points: PointD[]): number;
+                pushRange(points: Iterable<PointD>): number;
+                clear(): void;
+                clone(): IPathD;
+                pop(): PointD | undefined;
+                get(index: number): PointD;
+                getClone(index: number): PointD;
+                getX(index: number): number;
+                getY(index: number): number;
+                set(index: number, x: number, y: number): void;
+                readonly length: number;
+            }
+
+            export interface PathDConstructor {
+                new(): IPathD;
+                new(arrayLength: number): IPathD;
+                new(...points: PointD[]): IPathD;
+            }
+
+            export interface PathsD extends Array<IPathD> {
+                clear(): void;
+                directPush(path: IPathD): void;
+                push(...paths: Iterable<PointD>[]): number;
+                pushRange(paths: Iterable<Iterable<PointD>>): number;
+            }
+
+            export interface PathsDConstructor {
+                new(): PathsD;
+                new(arrayLength: number): PathsD;
+                new(...paths: IPathD[]): PathsD;
+                clone(paths: Iterable<Iterable<PointD>>): PathsD;
+            }
+
+            export interface RectD {
+                left: number;
+                top: number;
+                right: number;
+                bottom: number;
+                width: number;
+                height: number;
+                midPoint(): PointD;
+                asPath(): IPathD;
+                contains(point: PointD): boolean;
+                contains(rect: RectD): boolean;
+                scale(scale: number): void;
+                isEmpty(): boolean;
+                intersects(rect: RectD): boolean;
+            }
+
+            export interface RectDConstructor {
+                new(): RectD;
+                new(left: number, top: number, right: number, bottom: number): RectD;
+                new(isValid: boolean): RectD;
+                new(rect: RectD): RectD;
+            }
+
+            export interface PolyPathBase extends Iterable<PolyPathBase> {
+                readonly length: number;
+                getLevel(): number;
+                getIsHole(): boolean;
+                clear(): void;
+            }
+
+            export interface PolyPathD extends PolyPathBase {
+                scale: number;
+                polygon?: IPathD;
+                area(): number;
+                [Symbol.iterator](): Generator<PolyPathD, void, unknown>;
+            }
+
+            export interface PolyTreeD extends PolyPathD {
+            }
+
+            export interface PolyTreeDConstructor {
+                new(parent?: PolyPathBase): PolyTreeD;
+            }
+
+            export interface ClipperD {
+                clear(): void;
+                addPath(path: Iterable<PointD>, pathType: PathType, isOpen?: boolean): void;
+                addPaths(paths: Iterable<PointD> | Iterable<Iterable<PointD>>, pathType: PathType, isOpen?: boolean): void;
+                addSubject(paths: Iterable<PointD> | Iterable<Iterable<PointD>>): void;
+                addOpenSubject(paths: Iterable<PointD> | Iterable<Iterable<PointD>>): void;
+                addClip(paths: Iterable<PointD> | Iterable<Iterable<PointD>>): void;
+                execute(clipType: ClipType, fillRule: FillRule, solutionClosed: PathsD, solutionOpen: PathsD): boolean;
+                execute(clipType: ClipType, fillRule: FillRule, solutionClosed: PathsD): boolean;
+                execute(clipType: ClipType, fillRule: FillRule, polyTree: PolyTreeD, openPaths: PathsD): boolean;
+                execute(clipType: ClipType, fillRule: FillRule, polyTree: PolyTreeD): boolean;
+            }
+
+            export interface ClipperDConstructor {
+                new(roundingDecimalPrecision?: number): ClipperD;
+            }
+
+            export interface ClipperApi {
+                intersect(subject: PathsD, clip: PathsD, fillRule: FillRule, precision?: number): PathsD;
+                union(subject: PathsD, fillRule: FillRule, precision?: number): PathsD;
+                union(subject: PathsD, clip: PathsD, fillRule: FillRule, precision?: number): PathsD;
+                difference(subject: PathsD, clip: PathsD, fillRule: FillRule, precision?: number): PathsD;
+                xor(subject: PathsD, clip: PathsD, fillRule: FillRule, precision?: number): PathsD;
+                booleanOp(clipType: ClipType, subject: PathsD, clip: PathsD | undefined, fillRule: FillRule, precision?: number): PathsD;
+                booleanOp(clipType: ClipType, subject: PathsD, clip: PathsD | undefined, polyTree: PolyTreeD, fillRule: FillRule, precision?: number): void;
+                inflatePaths(paths: PathsD, delta: number, joinType: JoinType, endType: EndType, miterLimit?: number, precision?: number, arcTolerance?: number): PathsD;
+                rectClip(rect: RectD, paths: IPathD | PathsD, precision?: number): PathsD;
+                rectClipLines(rect: RectD, paths: IPathD | PathsD, precision?: number): PathsD;
+                minkowskiSum(pattern: IPathD, path: IPathD, isClosed: boolean): PathsD;
+                minkowskiDiff(pattern: IPathD, path: IPathD, isClosed: boolean): PathsD;
+                area(path: IPathD | PathsD): number;
+                isPositive(path: IPathD): boolean;
+                pathDToString(path: IPathD): string;
+                pathsDToString(paths: PathsD): string;
+                scalePath(path: IPathD, scale: number): IPathD;
+                scalePaths(paths: PathsD, scale: number): PathsD;
+                translatePath(path: IPathD, dx: number, dy: number): IPathD;
+                translatePaths(paths: PathsD, dx: number, dy: number): PathsD;
+                reversePath(path: IPathD): IPathD;
+                reversePaths(paths: PathsD): PathsD;
+                getBounds(path: IPathD | PathsD): RectD;
+                makePathD(points: ArrayLike<number>): IPathD;
+                stripNearDuplicates(path: IPathD, minEdgeLengthSquared: number, isClosedPath: boolean): IPathD;
+                ramerDouglasPeucker(path: IPathD, epsilon: number): IPathD;
+                ramerDouglasPeucker(paths: PathsD, epsilon: number): PathsD;
+                simplifyPath(path: IPathD, epsilon: number, isClosedPath?: boolean): IPathD;
+                simplifyPaths(paths: PathsD, epsilon: number, isClosedPaths?: boolean): PathsD;
+                trimCollinear(path: IPathD, precision: number, isOpen?: boolean): IPathD;
+                pointInPolygon(point: PointD, polygon: IPathD, precision?: number): PointInPolygonResult;
+                ellipse(center: PointD, radiusX: number, radiusY?: number, steps?: number): IPathD;
+            }
+        }
+
+        /** Runtime exports of the built-in Clipper2 polygon library. */
+        export interface IClipper2 {
+            readonly FillRule: {
+                readonly EvenOdd: 0;
+                readonly NonZero: 1;
+                readonly Positive: 2;
+                readonly Negative: 3;
+            };
+            readonly ClipType: {
+                readonly None: 0;
+                readonly Intersection: 1;
+                readonly Union: 2;
+                readonly Difference: 3;
+                readonly Xor: 4;
+            };
+            readonly PathType: {
+                readonly Subject: 1;
+                readonly Clip: 2;
+            };
+            readonly JoinType: {
+                readonly Square: 0;
+                readonly Round: 1;
+                readonly Miter: 2;
+                readonly Bevel: 3;
+            };
+            readonly EndType: {
+                readonly Polygon: 0;
+                readonly Joined: 1;
+                readonly Butt: 2;
+                readonly Square: 3;
+                readonly Round: 4;
+            };
+            readonly PointInPolygonResult: {
+                readonly IsOn: 0;
+                readonly IsInside: 1;
+                readonly IsOutside: 2;
+            };
+            readonly PathD: Clipper2.PathDConstructor;
+            readonly PathsD: Clipper2.PathsDConstructor;
+            readonly RectD: Clipper2.RectDConstructor;
+            readonly ClipperD: Clipper2.ClipperDConstructor;
+            readonly PolyTreeD: Clipper2.PolyTreeDConstructor;
+            readonly Clipper: Clipper2.ClipperApi;
+            readonly isPathD: (value: unknown) => value is Clipper2.IPathD;
+            readonly isPathsD: (value: unknown) => value is Clipper2.PathsD;
+            readonly isPointD: (value: unknown) => value is Clipper2.PointD;
+            readonly isRectD: (value: unknown) => value is Clipper2.RectD;
+        }
+
         export enum OrthographicMode {
             Orthographic_XZ,
             Orthographic_XY,
@@ -9958,6 +10159,9 @@ declare global {
          * @see MyMessagePortStatic
          */
         const MyMessagePort: (new (port: MessagePort, queueTask?: boolean) => IMyMessagePort) & typeof MyMessagePortStatic;
+        /** Built-in polygon clipping, offsetting, and path utility library. */
+        const Clipper2: IClipper2;
+
         /**
          * `Gizmos2D` is a helper class for drawing 2D gizmos.
          */

@@ -29,8 +29,8 @@ export function getPropertyNodeTypeId(propertyName: string): string {
     return PROPERTY_NODE_TYPE_PREFIX + encodeURIComponent(propertyName);
 }
 
-export function createNodeRegistry(owner: RegistryOwner): IEditor.FlowApi.MutableNodeRegistry {
-    const definitions: IEditor.FlowApi.NodeDefinition[] = [];
+export function createNodeRegistry(owner: RegistryOwner): IEditor.IFlow.MutableNodeRegistry {
+    const definitions: IEditor.IFlow.NodeDefinition[] = [];
 
     for (const definition of VFX_EVENT_DEFS) {
         const title = getVfxTypeCaption(
@@ -95,29 +95,29 @@ export function createNodeRegistry(owner: RegistryOwner): IEditor.FlowApi.Mutabl
 
 export { canConnect };
 
-class VfxNodeRegistry implements IEditor.FlowApi.MutableNodeRegistry {
-    private readonly base: IEditor.FlowApi.MutableNodeRegistry;
+class VfxNodeRegistry implements IEditor.IFlow.MutableNodeRegistry {
+    private readonly base: IEditor.IFlow.MutableNodeRegistry;
 
     constructor(
         private readonly owner: RegistryOwner,
-        definitions: IEditor.FlowApi.NodeDefinition[],
+        definitions: IEditor.IFlow.NodeDefinition[],
     ) {
         this.base = new IEditor.Flow.NodeRegistry(definitions);
     }
 
-    add(definition: IEditor.FlowApi.NodeDefinition): void {
+    add(definition: IEditor.IFlow.NodeDefinition): void {
         this.base.add(definition);
     }
 
-    getDefinition(typeId: string): IEditor.FlowApi.NodeDefinition | undefined {
+    getDefinition(typeId: string): IEditor.IFlow.NodeDefinition | undefined {
         return this.base.getDefinition(typeId);
     }
 
-    list(): IEditor.FlowApi.NodeDefinition[] {
+    list(): IEditor.IFlow.NodeDefinition[] {
         return this.base.list();
     }
 
-    menuItems(): IEditor.FlowApi.NodeMenuItem[] {
+    menuItems(): IEditor.IFlow.NodeMenuItem[] {
         const items = this.base.menuItems()
             .filter(item => item.typeId !== PROPERTY_NODE_TYPE);
         const category = getVfxCaption("Property", true);
@@ -136,8 +136,8 @@ class VfxNodeRegistry implements IEditor.FlowApi.MutableNodeRegistry {
 
     createNode(
         typeId: string,
-        position: IEditor.FlowApi.XY,
-    ): IEditor.FlowApi.GraphNode | undefined {
+        position: IEditor.IFlow.XY,
+    ): IEditor.IFlow.GraphNode | undefined {
         if (!typeId.startsWith(PROPERTY_NODE_TYPE_PREFIX))
             return this.base.createNode(typeId, position);
 
@@ -168,7 +168,7 @@ function flowDefinition(
     displayMenuPath: string,
     headerColor?: string,
     bodyRenderer?: string,
-): IEditor.FlowApi.NodeDefinition {
+): IEditor.IFlow.NodeDefinition {
     return {
         typeId: `${kind}/${typeId}`,
         title,

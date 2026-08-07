@@ -51,7 +51,13 @@ function startPropertyDrag(
     event.dataTransfer.effectAllowed = "copy";
 }
 
-export function LeftPanel({ document }: { document: VfxDocument }): React.ReactElement {
+export function LeftPanel({
+    document,
+    focusNode,
+}: {
+    document: VfxDocument;
+    focusNode(nodeId: string): void;
+}): React.ReactElement {
     useSyncExternalStore(document.metaStore.subscribe, document.metaStore.getSnapshot);
     const [selectedProperty, setSelectedProperty] = useState<IVfxPropertyDef | null>(null);
     const [propertiesOpen, setPropertiesOpen] = useState(true);
@@ -171,6 +177,11 @@ export function LeftPanel({ document }: { document: VfxDocument }): React.ReactE
                                     property={property}
                                     selected={selectedProperty === property}
                                     onSelect={() => setSelectedProperty(property)}
+                                    onFocus={() => {
+                                        const nodeId = document.findPropertyNode(property.name);
+                                        if (nodeId)
+                                            focusNode(nodeId);
+                                    }}
                                     onContextMenu={event =>
                                         removeProperty(property, index, event)}
                                 />
@@ -205,6 +216,11 @@ export function LeftPanel({ document }: { document: VfxDocument }): React.ReactE
                                                 selected={selectedProperty === property}
                                                 grouped
                                                 onSelect={() => setSelectedProperty(property)}
+                                                onFocus={() => {
+                                                    const nodeId = document.findPropertyNode(property.name);
+                                                    if (nodeId)
+                                                        focusNode(nodeId);
+                                                }}
                                                 onContextMenu={event =>
                                                     removeProperty(property, index, event)}
                                             />
@@ -244,6 +260,7 @@ function PropertyListRow({
     selected,
     grouped = false,
     onSelect,
+    onFocus,
     onContextMenu,
 }: {
     assetId: string;
@@ -251,6 +268,7 @@ function PropertyListRow({
     selected: boolean;
     grouped?: boolean;
     onSelect(): void;
+    onFocus(): void;
     onContextMenu(event: React.MouseEvent): void;
 }): React.ReactElement {
     const typeLabel = propertyTypeOptions.find(option => option.type === property.type)?.label
@@ -263,6 +281,7 @@ function PropertyListRow({
             tabIndex={0}
             draggable
             onClick={onSelect}
+            onDoubleClick={onFocus}
             onContextMenu={onContextMenu}
             onDragStart={event => startPropertyDrag(event, assetId, property.name)}
         >

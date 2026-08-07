@@ -240,13 +240,8 @@ class EditorController {
     }
 
     private attachDocument(document: VfxDocument): void {
-        document.onChange = () => {
-            this.updateTab(document);
-            this.emit();
-        };
         document.onModifiedChange = () => {
             this.updateTab(document);
-            this.emit();
         };
     }
 
