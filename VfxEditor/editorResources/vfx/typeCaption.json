@@ -71,7 +71,7 @@
     "gravity": "重力",
     "linearDrag": "线性阻力",
     "turbulence": "湍流",
-    "force": "力",
+    "force": "通用力",
     "vortex": "涡旋",
     "vectorFieldForce": "向量场力",
     "attractorSphere": "吸引器 (球)",

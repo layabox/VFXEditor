@@ -666,7 +666,7 @@ export const VFX_BLOCK_DEFS: IVfxBlockTypeDef[] = [
     {
         typeId: "attractorShapeSDF",
         title: "Conform to Shape (SDF)",
-        category: "Forces",
+        category: "Force",
         affinity: ["update"],
         properties: [
             { name: "texture", caption: "SDF Texture", type: "Texture3D" },
