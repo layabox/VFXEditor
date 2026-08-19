@@ -2,18 +2,34 @@
   "compilerOptions": {
     "module": "es6",
     "target": "es6",
+    "lib": [
+      "es2021",
+      "DOM"
+    ],
     "strict": true,
     "strictNullChecks": false,
     "noEmitHelpers": true,
     "sourceMap": false,
     "experimentalDecorators": true,
     "skipLibCheck": true,
-    "jsx": "react-jsx",
+    "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
-    "types": ["node", "react", "react-dom"],
+    "jsx": "react",
+    "types": [
+      "node",
+      "react",
+      "react-dom"
+    ],
+    "paths": {
+      "~/packages/*": [
+        "./library/packages/*"
+      ]
+    }
   },
   "include": [
-    "VfxEditor",
-    "./types"
+    "./assets",
+    "./src",
+    "./packages",
+    "./engine"
   ]
 }
